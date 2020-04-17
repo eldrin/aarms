@@ -2,7 +2,7 @@ import numpy as np
 from tqdm import tqdm
 
 from ..metric import ndcg
-
+from ..utils import check_blas_config
 from ._als import (update_user_factor, update_item_factor, update_feat_factor)
 
 
