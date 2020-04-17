@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 
 def readme():
@@ -25,7 +25,8 @@ setup(name='aarms',
       author='Jaehun Kim',
       author_email='j.h.kim@tudelft.nl',
       license='MIT',
-      packages=['aarms'],
+      # packages=['aarms'],
+      packages=find_packages('.')
       install_requires=requirements(),
       test_suite='nose.collector',
       tests_require=['nose', 'nose-cover3'],
