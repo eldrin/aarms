@@ -3,11 +3,10 @@ import numpy as np
 
 
 @nb.njit(nogil=True, parallel=True)
-def update_user_factor(data, indices, indptr, U, V, lmbda):
+def update_user_factor(data, indices, indptr, U, V, lmbda, solver='cg'):
     """"""
-    VV = V.T @ V  # precompute
     d = V.shape[1]
-    I = np.eye(d, dtype=VV.dtype)
+    VVpI = V.T @ V + lmbda * np.eye(d, dtype=V.dtype)
     # randomize the order so that scheduling is more efficient
     rnd_idx = np.random.permutation(U.shape[0])
 
@@ -19,28 +18,33 @@ def update_user_factor(data, indices, indptr, U, V, lmbda):
             continue
         ind = indices[u0:u1]
         val = data[u0:u1]
-        U[u] = partial_ALS(val, ind, V, VV, lmbda)
+        if solver == 'cg':
+            partial_ALS_cg(u, val, ind, U, V, VVpI)
+        elif solver == 'cholskey':
+            partial_ALS(u, val, ind, U, V, VVpI)
 
 
 @nb.njit(nogil=True, parallel=True)
-def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda):
+def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda, solver='cholskey'):
     """"""
-    UU = U.T @ U
     d = U.shape[1]
     h = X.shape[1]
-    I = np.eye(d, dtype=UU.dtype)
+    UUpI = U.T @ U + lmbda * np.eye(d, dtype=U.dtype)
     # randomize the order so that scheduling is more efficient
     rnd_idx = np.random.permutation(V.shape[0])
 
     for n in nb.prange(V.shape[0]):
-    # for n in range(V.shape[0]):
         i = rnd_idx[n]
         i0, i1 = indptr[i], indptr[i+1]
         # if i1 - i0 == 0:
         #     continue
         ind = indices[i0:i1]
         val = data[i0:i1]
-        V[i] = partial_ALS_feat(val, ind, U, UU, X[i], W, lmbda_x, lmbda)
+
+        if solver == 'cg':
+            partial_ALS_feat_cg(i, val, ind, V, U, UUpI, X[i], W, lmbda_x)
+        elif solver == 'cholskey':
+            partial_ALS_feat(i, val, ind, V, U, UUpI, X[i], W, lmbda_x)
 
 
 @nb.njit
@@ -71,10 +75,11 @@ def update_feat_factor(V, X, XX, W, lmbda_x, lmbda):
 
 
 @nb.njit
-def partial_ALS(data, indices, V, VV, lmbda):
+def partial_ALS(u, data, indices, U, V, VVpI):
     d = V.shape[1]
     b = np.zeros((d,))
-    A = np.zeros((d, d))
+    # A = np.zeros((d, d))
+    A = VVpI.copy()
     c = data + 0
     vv = V[indices].copy()
     # I = np.eye(d, dtype=VV.dtype)
@@ -87,9 +92,9 @@ def partial_ALS(data, indices, V, VV, lmbda):
     # A = VV + vv.T @ np.diag(c - 1) @ vv + lmbda * I
     for f in range(d):
         for q in range(f, d):
-            if q == f:
-                A[f, q] += lmbda
-            A[f, q] += VV[f, q]
+            # if q == f:
+            #     A[f, q] += lmbda
+            # A[f, q] += VV[f, q]
             for j in range(len(c)):
                 A[f, q] += vv[j, f] * (c[j] - 1) * vv[j, q]
 
@@ -100,14 +105,83 @@ def partial_ALS(data, indices, V, VV, lmbda):
             A[k][j] = A[j][k]
 
     # update user factor
-    return np.linalg.solve(A, b.ravel())
+    U[u] = np.linalg.solve(A, b.ravel())
 
 
 @nb.njit
-def partial_ALS_feat(data, indices, U, UU, x, W, lmbda_x, lmbda):
+def partial_ALS_cg(u, data, indices, U, V, VVpI, cg_steps=3, eps=1e-20):
+    """"""
+    d = V.shape[1]
+    b = np.zeros((d,))
+    c = data + 0
+    vv = V[indices].copy()
+    x = U[u].copy()
+    p = np.empty((d,), dtype=V.dtype)
+    r = np.empty((d,), dtype=V.dtype)
+
+    # [r = VCp - V(C - I)Vu - VVu]
+    # ======================================
+    # r = VVpI.dot(x)
+    for f in range(d):
+        for q in range(d):
+            r[f] -= VVpI[f, q] * x[q]
+    # r += VCp - V(C - I)Vu
+    # <=> r += V(Cp - (C - I)Vu)
+    for j in range(len(c)):
+        vx = p.dtype.type(0.)
+        for f in range(d):
+            vx += vv[j, f] * x[f]
+        for f in range(d):
+            r[f] += (c[j] - (c[j] - 1) * vx) * vv[j, f]
+
+    p = r.copy()
+    rsold = p.dtype.type(0.)
+    for f in range(d):
+        rsold += r[f]**2
+    if rsold**.5 < eps:
+        return
+
+    for it in range(cg_steps):
+        # calculate Ap = VCVp - without actually calculate VCV
+        Ap = np.zeros((d,), dtype=V.dtype)
+        for f in range(d):
+            for q in range(d):
+                Ap[f] += VVpI[f, q] * p[q]
+
+        for j in range(len(c)):
+            vp = p.dtype.type(0.)
+            for f in range(d):
+                vp += vv[j, f] * p[f]
+
+            for f in range(d):
+                Ap[f] += (c[j] - 1) * vp * vv[j, f]
+
+        # standard CG update
+        pAp = p.dtype.type(0.)
+        for f in range(d):
+            pAp += p[f] * Ap[f]
+        alpha = rsold / pAp
+        for f in range(d):
+            x[f] += alpha * p[f]
+            r[f] -= alpha * Ap[f]
+
+        rsnew = p.dtype.type(0.)
+        for f in range(d):
+            rsnew += r[f]**2
+        if rsnew**.5 < eps:
+            break
+        p = r + (rsnew / rsold) * p
+        rsold = rsnew
+
+    U[u] = x
+
+
+@nb.njit
+def partial_ALS_feat(i, data, indices, V, U, UUpI, x, W, lmbda_x):
     d = U.shape[1]
     b = np.zeros((d,))
-    A = np.zeros((d, d))
+    # A = np.zeros((d, d))
+    A = UUpI.copy()
     xw = np.zeros((d,))
     c = data + 0
     uu = U[indices].copy()
@@ -127,9 +201,11 @@ def partial_ALS_feat(data, indices, U, UU, x, W, lmbda_x, lmbda):
     # A = UU + uu.T @ np.diag(c - 1) @ uu + (lmbda_x + lmbda) * I
     for f in range(d):
         for q in range(f, d):
+            # if q == f:
+            #     A[f, q] += (lmbda + lmbda_x)
+            # A[f, q] += UU[f, q]
             if q == f:
-                A[f, q] += (lmbda + lmbda_x)
-            A[f, q] += UU[f, q]
+                A[f, q] += lmbda_x
             for j in range(len(c)):
                 A[f, q] += uu[j, f] * (c[j] - 1) * uu[j, q]
 
@@ -139,4 +215,87 @@ def partial_ALS_feat(data, indices, U, UU, x, W, lmbda_x, lmbda):
         for k in range(j+1, d):
             A[k][j] = A[j][k]
 
-    return np.linalg.solve(A, b.ravel())
+    V[i] = np.linalg.solve(A, b.ravel())
+
+
+@nb.njit
+def partial_ALS_feat_cg(i, data, indices, V, U, UUpI, x, W, lmbda_x, cg_steps=4, eps=1e-20):
+    """"""
+    d = V.shape[1]
+    c = data + 0
+    uu = U[indices].copy()
+    v = V[i].copy()
+
+    xw = np.zeros((d,), dtype=V.dtype)
+    # xw = x @ W
+    for f in range(d):
+        for h in range(len(x)):
+            xw[f] += x[h] * W[h, f]
+
+    p = np.empty((d,), dtype=V.dtype)
+    r = np.empty((d,), dtype=V.dtype)
+
+    # compute residual
+    # [r = b - Ap]
+    #    => [r = (UCp + l_x * xW) - (U(C-I)Uv + UUv + (l_x + l) * Iv)]
+    # =============================================
+    # r = -(UUpI + l_x * I).dot(v)
+    for f in range(d):
+        for q in range(d):
+            if f == q:
+                r[f] -= lmbda_x * v[q]
+            r[f] -= UUpI[f, q] * v[q]
+
+    # r += UCp - U(C-I)Uv + l_x * xW
+    # <=> r += U(Cp - (C-I)Uv) + l_x * xW
+    for j in range(len(c)):
+        uv = p.dtype.type(0.)
+        for f in range(d):
+            uv += uu[j, f] * v[f]
+
+        for f in range(d):
+            r[f] += (c[j] - (c[j] - 1) * uv) * uu[j, f] + lmbda_x * xw[f]
+
+    p = r.copy()
+    rsold = p.dtype.type(0.)
+    for f in range(d):
+        rsold += r[f]**2
+    if rsold**.5 < eps:
+        return
+
+    for it in range(cg_steps):
+        # calculate Ap = (UCU + (l_x + l)I)p without actually calculate UCU
+        Ap = np.zeros((d,), dtype=V.dtype)
+        for f in range(d):
+            for q in range(d):
+                if f == q:
+                    Ap[f] += lmbda_x * p[q]
+                Ap[f] += UUpI[f, q] * p[q]
+
+        for j in range(len(c)):
+            up = p.dtype.type(0.)
+            for f in range(d):
+                up += uu[j, f] * p[f]
+
+            for f in range(d):
+                Ap[f] += uu[j, f] * (c[j] - 1) * up
+
+        # standard CG update
+        pAp = p.dtype.type(0.)
+        for f in range(d):
+            pAp += p[f] * Ap[f]
+        alpha = rsold / pAp
+        for f in range(d):
+            v[f] += alpha * p[f]
+            r[f] -= alpha * Ap[f]
+
+        rsnew = p.dtype.type(0.)
+        for f in range(d):
+            rsnew += r[f]**2
+        if rsnew**.5 < eps:
+            break
+        p = r + (rsnew / rsold) * p
+        rsold = rsnew
+
+    # update
+    V[i] = v

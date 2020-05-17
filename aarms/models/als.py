@@ -1,4 +1,6 @@
+import multiprocessing as mp
 import numpy as np
+import numba as nb
 
 from tqdm import tqdm
 
@@ -9,7 +11,7 @@ from ._als import update_user_factor
 
 class ALS:
     def __init__(self, k, init=0.001, l2=0.0001, n_iters=15,
-                 alpha=5, eps=0.5, dtype='float32'):
+                 alpha=5, eps=0.5, dtype='float32', n_jobs=-1):
 
         if dtype == 'float32':
             self.f_dtype = np.float32
@@ -25,8 +27,15 @@ class ALS:
         self.eps = self.f_dtype(eps)
         self.dtype = dtype
         self.n_iters = n_iters
+        self.n_jobs = n_jobs
 
         check_blas_config()
+        if n_jobs == -1:
+            # nb.set_num_threads(mp.cpu_count())
+            nb.config.NUMBA_NUM_THREADS = mp.cpu_count()
+        else:
+            # nb.set_num_threads(self.n_jobs)
+            nb.config.NUMBA_NUM_THREADS = n_jobs
 
     def __repr__(self):
         return "ALS@{:d}".format(self.k)
@@ -49,6 +58,7 @@ class ALS:
         user_item.data = self.f_dtype(1) + user_item.data * self.alpha
         item_user = user_item.T.tocsr()
 
+        # set the number of threads for training
         dsc_tmp = '[vacc={:.4f}]'
         with tqdm(total=self.n_iters, desc='[vacc=0.0000]',
                   disable=not verbose, ncols=80) as p:

@@ -1,4 +1,6 @@
+import multiprocessing as mp
 import numpy as np
+import numba as nb
 from tqdm import tqdm
 
 from ..metric import ndcg
@@ -8,7 +10,7 @@ from ._als import (update_user_factor, update_item_factor, update_feat_factor)
 
 class ALSFeat:
     def __init__(self, k, init=0.001, lmbda=1, l2=0.0001, n_iters=15,
-                 alpha=5, eps=0.5, dropout=0., dtype='float32'):
+                 alpha=5, eps=0.5, dropout=0., dtype='float32', n_jobs=-1):
 
         if dtype == 'float32':
             self.f_dtype = np.float32
@@ -26,8 +28,15 @@ class ALSFeat:
         self.dtype = dtype
         self.n_iters = n_iters
         self.dropout = dropout
+        self.n_jobs = n_jobs
 
         check_blas_config()
+        if n_jobs == -1:
+            # nb.set_num_threads(mp.cpu_count())
+            nb.config.NUMBA_NUM_THREADS = mp.cpu_count()
+        else:
+            # nb.set_num_threads(self.n_jobs)
+            nb.config.NUMBA_NUM_THREADS = n_jobs
 
     def __repr__(self):
         return "ALSFeat@{:d}".format(self.k)
