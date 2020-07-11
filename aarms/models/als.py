@@ -1,31 +1,32 @@
 import multiprocessing as mp
+from functools import partial
+
 import numpy as np
 import numba as nb
 
 from tqdm import tqdm
 
-from ..metric import ndcg
 from ..utils import check_blas_config
 from ._als import update_user_factor
+from .base import (BaseRecommender, FactorizationMixin)
+from .transform import (linear_confidence,
+                        log_confidence,
+                        sppmi)
 
 
-class ALS:
+class ALS(FactorizationMixin, BaseRecommender):
     def __init__(self, k, init=0.001, l2=0.0001, n_iters=15,
-                 alpha=5, eps=0.5, dtype='float32', n_jobs=-1):
+                 alpha=5, eps=0.5, kappa=1,
+                 transform=linear_confidence,
+                 dtype='float32', n_jobs=-1):
+        """"""
+        BaseRecommender.__init__(self)
+        FactorizationMixin.__init__(self, dtype, k, init)
 
-        if dtype == 'float32':
-            self.f_dtype = np.float32
-        elif dtype == 'float64':
-            self.f_dtype = np.float64
-        else:
-            raise ValueError('Only float32/float64 are supported!')
-
-        self.k = k
-        self.init = self.f_dtype(init)
         self.l2 = self.f_dtype(l2)
         self.alpha = self.f_dtype(alpha)
         self.eps = self.f_dtype(eps)
-        self.dtype = dtype
+        self.kappa = self.f_dtype(kappa)
         self.n_iters = n_iters
         self.n_jobs = n_jobs
 
@@ -37,25 +38,26 @@ class ALS:
             # nb.set_num_threads(self.n_jobs)
             nb.config.NUMBA_NUM_THREADS = n_jobs
 
+        # set transform function
+        if transform == linear_confidence:
+            self._transform = partial(transform, alpha=self.alpha)
+        elif transform == log_confidence:
+            self._transform = partial(transform, alpha=self.alpha, eps=self.eps)
+        elif transform == sppmi:
+            self._transform = partial(sppmi, k=self.kappa)
+        else:
+            raise ValueError('[ERROR] not supported transform given!')
+
     def __repr__(self):
         return "ALS@{:d}".format(self.k)
-
-    def _init_embeddings(self):
-        for key, param in self.embeddings_.items():
-            self.embeddings_[key] = param.astype(self.dtype) * self.init
 
     def fit(self, user_item, valid_user_item=None, verbose=False):
         """"""
         n_users, n_items = user_item.shape
-        self.embeddings_ = {
-            'user': np.random.randn(n_users, self.k),
-            'item': np.random.randn(n_items, self.k),
-        }
-        self._init_embeddings()
+        self._init_embeddings(user=n_users, item=n_items)
 
         # preprocess data
-        user_item = user_item.copy().astype(self.dtype)
-        user_item.data = self.f_dtype(1) + user_item.data * self.alpha
+        user_item = self._transform(user_item.astype(self.dtype))
         item_user = user_item.T.tocsr()
 
         # set the number of threads for training
@@ -81,21 +83,6 @@ class ALS:
                     p.set_description(dsc_tmp.format(score))
                 p.update(1)
 
-    def validate(self, user_item, valid_user_item, n_tests=2000, topk=100):
+    def _get_score(self, user):
         """"""
-        scores = []
-        if n_tests >= user_item.shape[0]:
-            targets = range(user_item.shape[0])
-        else:
-            targets = np.random.choice(user_item.shape[0], n_tests, False)
-        for u in targets:
-            true = valid_user_item[u].indices
-            if len(true) == 0:
-                continue
-            train = user_item[u].indices
-            s = self.embeddings_['user'][u] @ self.embeddings_['item'].T
-            s[train] = -np.inf
-            idx = np.argpartition(-s, kth=topk)[:topk]
-            pred = idx[np.argsort(-s[idx])]
-            scores.append(ndcg(true, pred, topk))
-        return np.mean(scores)
+        return self.embeddings_['user'][user] @ self.embeddings_['item'].T

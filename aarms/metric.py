@@ -1,4 +1,5 @@
 import numpy as np
+import numba as nb
 
 
 def ndcg(actual, predicted, k=10):
