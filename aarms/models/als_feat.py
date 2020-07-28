@@ -1,4 +1,6 @@
 import multiprocessing as mp
+from functools import partial
+
 import numpy as np
 import numba as nb
 from tqdm import tqdm
@@ -18,7 +20,7 @@ class ALSFeat(FactorizationMixin, BaseItemFeatRecommender):
                  alpha=5, eps=0.5, kappa=1, transform=linear_confidence,
                  dtype='float32', n_jobs=-1):
         """"""
-        BaseRecommender.__init__(self)
+        BaseItemFeatRecommender.__init__(self)
         FactorizationMixin.__init__(self, dtype, k, init)
 
         self.lmbda = self.f_dtype(lmbda)
