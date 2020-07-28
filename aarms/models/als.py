@@ -16,9 +16,8 @@ from .transform import (linear_confidence,
 
 class ALS(FactorizationMixin, BaseRecommender):
     def __init__(self, k, init=0.001, l2=0.0001, n_iters=15,
-                 alpha=5, eps=0.5, kappa=1,
-                 transform=linear_confidence,
-                 dtype='float32', n_jobs=-1):
+                 alpha=5, eps=0.5, kappa=1, transform=linear_confidence,
+                 dtype='float32', solver='cg', cg_steps=3, n_jobs=-1):
         """"""
         BaseRecommender.__init__(self)
         FactorizationMixin.__init__(self, dtype, k, init)
@@ -29,6 +28,8 @@ class ALS(FactorizationMixin, BaseRecommender):
         self.kappa = self.f_dtype(kappa)
         self.n_iters = n_iters
         self.n_jobs = n_jobs
+        self.solver = solver
+        self.cg_steps = cg_steps
 
         check_blas_config()
         if n_jobs == -1:
@@ -69,13 +70,15 @@ class ALS(FactorizationMixin, BaseRecommender):
                 # update user factors
                 update_user_factor(
                     user_item.data, user_item.indices, user_item.indptr,
-                    self.embeddings_['user'], self.embeddings_['item'], self.l2
+                    self.embeddings_['user'], self.embeddings_['item'], self.l2,
+                    solver=self.solver, cg_steps=self.cg_steps
                 )
 
                 # update item factors
                 update_user_factor(
                     item_user.data, item_user.indices, item_user.indptr,
-                    self.embeddings_['item'], self.embeddings_['user'], self.l2
+                    self.embeddings_['item'], self.embeddings_['user'], self.l2,
+                    solver=self.solver, cg_steps=self.cg_steps
                 )
 
                 if valid_user_item is not None:
