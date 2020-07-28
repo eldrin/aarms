@@ -3,7 +3,8 @@ import numpy as np
 
 
 @nb.njit(nogil=True, parallel=True, cache=True)
-def update_user_factor(data, indices, indptr, U, V, lmbda, solver='cg'):
+def update_user_factor(data, indices, indptr, U, V, lmbda, 
+                       solver='cg', cg_steps=3):
     """"""
     d = V.shape[1]
     VVpI = V.T @ V + lmbda * np.eye(d, dtype=V.dtype)
@@ -19,13 +20,15 @@ def update_user_factor(data, indices, indptr, U, V, lmbda, solver='cg'):
         ind = indices[u0:u1]
         val = data[u0:u1]
         if solver == 'cg':
-            partial_ALS_cg(u, val, ind, U, V, VVpI, cg_steps=3, eps=1e-20)
+            partial_ALS_cg(u, val, ind, U, V, VVpI, 
+                           cg_steps=cg_steps, eps=1e-20)
         elif solver == 'cholskey':
             partial_ALS(u, val, ind, U, V, VVpI)
 
 
 @nb.njit(nogil=True, parallel=True, cache=True)
-def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda, solver='cg'):
+def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda,
+                       solver='cg', cg_steps=3):
     """"""
     d = U.shape[1]
     h = X.shape[1]
@@ -43,7 +46,7 @@ def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda, solver
 
         if solver == 'cg':
             partial_ALS_feat_cg(i, val, ind, V, U, UUpI, X[i], W, lmbda_x,
-                                cg_steps=3, eps=1e-20)
+                                cg_steps=cg_steps, eps=1e-20)
         elif solver == 'cholskey':
             partial_ALS_feat(i, val, ind, V, U, UUpI, X[i], W, lmbda_x)
 

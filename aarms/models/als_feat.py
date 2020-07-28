@@ -18,7 +18,7 @@ from .transform import (linear_confidence,
 class ALSFeat(FactorizationMixin, BaseItemFeatRecommender):
     def __init__(self, k, init=0.001, lmbda=1, l2=0.0001, n_iters=15, dropout=0.,
                  alpha=5, eps=0.5, kappa=1, transform=linear_confidence,
-                 dtype='float32', n_jobs=-1):
+                 dtype='float32', solver='cg', cg_steps=3, n_jobs=-1):
         """"""
         BaseItemFeatRecommender.__init__(self)
         FactorizationMixin.__init__(self, dtype, k, init)
@@ -30,6 +30,8 @@ class ALSFeat(FactorizationMixin, BaseItemFeatRecommender):
         self.n_iters = n_iters
         self.dropout = dropout
         self.n_jobs = n_jobs
+        self.solver = solver
+        self.cg_steps = cg_steps
 
         check_blas_config()
         if n_jobs == -1:
@@ -95,14 +97,16 @@ class ALSFeat(FactorizationMixin, BaseItemFeatRecommender):
                 # update user factors
                 update_user_factor(
                     UI.data, UI.indices, UI.indptr,
-                    self.embeddings_['user'], self.embeddings_['item'], l2
+                    self.embeddings_['user'], self.embeddings_['item'], l2,
+                    solver=self.solver, cg_steps=self.cg_steps
                 )
 
                 # update item factors
                 update_item_factor(
                     IU.data, IU.indices, IU.indptr,
                     self.embeddings_['user'], self.embeddings_['item'],
-                    item_feat, self.embeddings_['feat'], lmbda, l2
+                    item_feat, self.embeddings_['feat'], lmbda, l2,
+                    solver=self.solver, cg_steps=self.cg_steps
                 )
 
                 # update feat factors
