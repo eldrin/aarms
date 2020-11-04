@@ -25,7 +25,8 @@ class BaseRecommender:
 
         for i, u in enumerate(targets):
             true, rel = slice_row_sparse(valid_user_item, u)
-            if len(true) == 0: continue
+            if len(true) == 0:
+                continue
 
             pred = self.predict(u, user_item, topk)
             scores[i] = ndcg(true, pred, topk)
@@ -45,12 +46,12 @@ class BaseItemFeatRecommender(BaseRecommender):
 class FactorizationMixin:
     def __init__(self, dtype, k, init=0.001):
         """"""
-        if dtype == 'float32':
+        if dtype == "float32" or dtype == np.float32:
             self.f_dtype = np.float32
-        elif dtype == 'float64':
+        elif dtype == "float64" or dtype == np.float64:
             self.f_dtype = np.float64
         else:
-            raise ValueError('Only float32/float64 are supported!')
+            raise ValueError("Only float32/float64 are supported!")
 
         self.dtype = dtype
         self.k = k
@@ -68,7 +69,7 @@ class FactorizationMixin:
         """"""
         s = self._get_score(user)
         if user_item is not None:
-            u0, u1 = user_item.indptr[user], user_item.indptr[user+1]
+            u0, u1 = user_item.indptr[user], user_item.indptr[user + 1]
             if u1 > u0:
                 train = user_item.indices[u0:u1]
                 s[train] = -np.inf

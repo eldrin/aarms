@@ -1,304 +1,1447 @@
-import numba as nb
+from scipy import sparse as sp
+
 import numpy as np
+import numba as nb
 
 
-@nb.njit(nogil=True, parallel=True, cache=True)
-def update_user_factor(data, indices, indptr, U, V, lmbda, 
-                       solver='cg', cg_steps=3):
-    """"""
-    d = V.shape[1]
-    VVpI = V.T @ V + lmbda * np.eye(d, dtype=V.dtype)
-    # randomize the order so that scheduling is more efficient
-    rnd_idx = np.random.permutation(U.shape[0])
-
-    # for n in range(U.shape[0]):
-    for n in nb.prange(U.shape[0]):
-        u = rnd_idx[n]
-        u0, u1 = indptr[u], indptr[u + 1]
-        if u1 - u0 == 0:
-            continue
-        ind = indices[u0:u1]
-        val = data[u0:u1]
-        if solver == 'cg':
-            partial_ALS_cg(u, val, ind, U, V, VVpI, 
-                           cg_steps=cg_steps, eps=1e-20)
-        elif solver == 'cholskey':
-            partial_ALS(u, val, ind, U, V, VVpI)
+# Atomic operations
+# =============================================================================
 
 
-@nb.njit(nogil=True, parallel=True, cache=True)
-def update_item_factor(data, indices, indptr, U, V, X, W, lmbda_x, lmbda,
-                       solver='cg', cg_steps=3):
-    """"""
-    d = U.shape[1]
-    h = X.shape[1]
-    UUpI = U.T @ U + lmbda * np.eye(d, dtype=U.dtype)
-    # randomize the order so that scheduling is more efficient
-    rnd_idx = np.random.permutation(V.shape[0])
-
-    for n in nb.prange(V.shape[0]):
-        i = rnd_idx[n]
-        i0, i1 = indptr[i], indptr[i+1]
-        # if i1 - i0 == 0:
-        #     continue
-        ind = indices[i0:i1]
-        val = data[i0:i1]
-
-        if solver == 'cg':
-            partial_ALS_feat_cg(i, val, ind, V, U, UUpI, X[i], W, lmbda_x,
-                                cg_steps=cg_steps, eps=1e-20)
-        elif solver == 'cholskey':
-            partial_ALS_feat(i, val, ind, V, U, UUpI, X[i], W, lmbda_x)
-
-
-@nb.njit(cache=True)
-def update_feat_factor(V, X, XX, W, lmbda_x, lmbda):
-    h = X.shape[1]
-    I = np.eye(h, dtype=V.dtype)
-    # d = V.shape[1]
-    # A = np.zeros((h, h))
-    # B = np.zeros((h, d))
-
-    A = XX + (lmbda / lmbda_x) * I
-    # for f in range(h):
-    #     for q in range(f, h):
-    #         if f == q:
-    #             A[f, q] += lmbda / lmbda_x 
-    #         for j in range(X.shape[0]):
-    #             A[f, q] += X[j, f] * X[j, q]
-    # A = A + A.T - np.diag(A)
-
-    B = X.T @ V
-    # for f in range(h):
-    #     for r in range(d):
-    #         for j in range(X.shape[0]):
-    #             B[f, r] += X[j, f] * V[j, r]
-
-    # update feature factors
-    W = np.linalg.solve(A, B)
-
-
-@nb.njit(cache=True)
-def partial_ALS(u, data, indices, U, V, VVpI):
-    d = V.shape[1]
-    b = np.zeros((d,), dtype=V.dtype)
-    # A = np.zeros((d, d))
-    A = VVpI.copy()
-    c = data + V.dtype.type(0.)
-    vv = V[indices].copy()
-    # I = np.eye(d, dtype=VV.dtype)
-
-    # b = np.dot(c, vv)
-    for f in range(d):
-        for j in range(len(c)):
-            b[f] += c[j] * vv[j, f]
-
-    # A = VV + vv.T @ np.diag(c - 1) @ vv + lmbda * I
-    for f in range(d):
-        for q in range(f, d):
-            # if q == f:
-            #     A[f, q] += lmbda
-            # A[f, q] += VV[f, q]
-            for j in range(len(c)):
-                A[f, q] += vv[j, f] * (c[j] - 1) * vv[j, q]
-
-    # copy the triu elements to the tril
-    # A = A + A.T - np.diag(np.diag(A))
-    for j in range(d):
-        for k in range(j+1, d):
-            A[k][j] = A[j][k]
-
-    # update user factor
-    # U[u] = np.linalg.solve(A, b.ravel())
-    U[u] = np.linalg.solve(A, b)
-
-
-@nb.njit([
-    "void(i8, f4[::1], i4[::1], f4[:, ::1], f4[:, ::1], f4[:, ::1], i8, f8)",
-    "void(i8, f8[::1], i4[::1], f8[:, ::1], f8[:, ::1], f8[:, ::1], i8, f8)",
-], cache=True)
-def partial_ALS_cg(u, data, indices, U, V, VVpI, cg_steps=3, eps=1e-20):
-    """"""
-    d = V.shape[1]
-    b = np.zeros((d,), dtype=V.dtype)
-    c = data + V.dtype.type(0.) 
-    vv = V[indices].copy()
-    x = U[u].copy()
-    r = np.zeros((d,), dtype=V.dtype)
-
-    # [r = VCp - V(C - I)Vu - VVu]
-    # ======================================
-    # r = -VVpI.dot(x)
-    for f in range(d):
-        for q in range(d):
-            r[f] -= VVpI[f, q] * x[q]
-    # r += VCp - V(C - I)Vu
-    # <=> r += V(Cp - (C - I)Vu)
-    for j in range(len(c)):
-        vx = r.dtype.type(0.)
-        for f in range(d):
-            vx += vv[j, f] * x[f]
-        for f in range(d):
-            r[f] += (c[j] - (c[j] - 1) * vx) * vv[j, f]
-
-    p = r.copy()
-    rsold = r.dtype.type(0.)
-    for f in range(d):
-        rsold += r[f]**2
-    if rsold**.5 < eps:
+def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
         return
 
-    for it in range(cg_steps):
-        # calculate Ap = VCVp - without actually calculate VCV
-        Ap = np.zeros((d,), dtype=V.dtype)
-        for f in range(d):
-            for q in range(d):
-                Ap[f] += VVpI[f, q] * p[q]
+    # prep data
+    c = val + factors.dtype.type(0.0)
+    vv = factors[ind].copy()
 
-        for j in range(len(c)):
-            vp = r.dtype.type(0.)
-            for f in range(d):
-                vp += vv[j, f] * p[f]
+    # compute "b" in "Ax=b"
+    b_ += lmbda * (vv.T @ c)
 
-            for f in range(d):
-                Ap[f] += (c[j] - 1) * vp * vv[j, f]
-
-        # standard CG update
-        pAp = r.dtype.type(0.)
-        for f in range(d):
-            pAp += p[f] * Ap[f]
-        alpha = rsold / pAp
-        for f in range(d):
-            x[f] += alpha * p[f]
-            r[f] -= alpha * Ap[f]
-
-        rsnew = r.dtype.type(0.)
-        for f in range(d):
-            rsnew += r[f]**2
-        if rsnew**.5 < eps:
-            break
-        p = r + (rsnew / rsold) * p
-        rsold = rsnew
-
-    U[u] = x
+    # compute "A" in "Ax=b"
+    A_ += lmbda * (covar + vv.T @ np.diag(c - 1) @ vv)
 
 
-@nb.njit(cache=True)
-def partial_ALS_feat(i, data, indices, V, U, UUpI, x, W, lmbda_x):
-    d = U.shape[1]
-    b = np.zeros((d,), dtype=V.dtype)
-    A = UUpI.copy()
-    xw = np.zeros((d,), dtype=V.dtype)
-    c = data + U.dtype.type(0.)
-    uu = U[indices].copy()
+@nb.njit(
+    [
+        "void(f4[:, ::1], f4[::1], f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4)",
+        "void(f8[:, ::1], f8[::1], f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
 
-    # xw = x @ W
+    # prep data
+    d = A_.shape[0]
+    c = val + A_.dtype.type(0.0)
+    vv = factors[ind].copy()
+
+    # compute 'b'
     for f in range(d):
-        for h in range(len(x)):
-            xw[f] += x[h] * W[h, f]
-
-    # b = np.dot(c, uu) + lmbda_x * xw
-    for f in range(d):
-        b[f] += lmbda_x * xw[f]
         for j in range(len(c)):
-            b[f] += c[j] * uu[j, f]
+            b_[f] += lmbda * vv[j, f] * c[j]
 
-    # A = UU + uu.T @ np.diag(c - 1) @ uu + (lmbda_x + lmbda) * I
+    # compute 'A'
     for f in range(d):
         for q in range(f, d):
-            if q == f:
-                A[f, q] += lmbda_x
+            A_[f, q] += lmbda * covar[f, q]
             for j in range(len(c)):
-                A[f, q] += uu[j, f] * (c[j] - 1) * uu[j, q]
+                A_[f, q] += lmbda * vv[j, f] * (c[j] - 1) * vv[j, q]
 
-    # copy the triu elements to the tril
-    # A = A + A.T - np.diag(np.diag(A))
-    for j in range(d):
-        for k in range(j+1, d):
-            A[k][j] = A[j][k]
-
-    V[i] = np.linalg.solve(A, b.ravel())
+    for f in range(d):
+        for q in range(f + 1, d):
+            A_[q, f] = A_[f, q]
 
 
-@nb.njit([
-    "void(i8, f4[::1], i4[::1], f4[:, ::1], f4[:, ::1], f4[:, ::1], f4[::1], f4[:, ::1], f8, i8, f8)",
-    "void(i8, f8[::1], i4[::1], f8[:, ::1], f8[:, ::1], f8[:, ::1], f8[::1], f8[:, ::1], f8, i8, f8)",
-], cache=True)
-def partial_ALS_feat_cg(i, data, indices, V, U, UUpI, x, W, lmbda_x,
-                        cg_steps=3, eps=1e-20):
-    """"""
-    d = V.shape[1]
-    c = data + V.dtype.type(0.)
-    uu = U[indices].copy()
-    v = V[i].copy()
-    r = np.zeros((d,), dtype=V.dtype)
+def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
+
+    # prep data
+    d = factors.shape[1]
+    c = val + factors.dtype.type(0.0)
+    vv = factors[ind].copy()
+
+    Ap[:] += lmbda * ((covar @ p) + vv.T @ np.diag(c - 1) @ (vv @ p))
+
+
+@nb.njit(
+    [
+        "void(f4[::1], f4[::1], i4[::1], f4[::1], f4[:,::1], f4[:,::1], f4)",
+        "void(f8[::1], f8[::1], i4[::1], f8[::1], f8[:,::1], f8[:,::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
+
+    # prep data
+    d = factors.shape[1]
+    c = val + factors.dtype.type(0.0)
+    vv = factors[ind].copy()
+
+    # compute 'Ap'
+    for f in range(d):
+        for q in range(d):
+            Ap[f] += lmbda * covar[f, q] * p[q]
+
+    for j in range(len(c)):
+        vp = p.dtype.type(0.0)
+        for f in range(d):
+            vp += vv[j, f] * p[f]
+
+        for f in range(d):
+            Ap[f] += lmbda * vv[j, f] * (c[j] - 1) * vp
+
+
+def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
+
+    # prep data
+    d = factors.shape[1]
+    c = val + factors.dtype.type(0.0)
+    vv = factors[ind].copy()
+
+    b_[:] += lmbda * (vv.T @ c)
+
+
+@nb.njit(
+    [
+        "void(f4[::1], f4[::1], i4[::1], f4[:, ::1], f4)",
+        "void(f8[::1], f8[::1], i4[::1], f8[:, ::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_wals_cg_b(b_, val, ind, factors, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
+
+    # prep data
+    d = factors.shape[1]
+    c = val + factors.dtype.type(0.0)
+    vv = factors[ind].copy()
+
+    for j in range(len(c)):
+        for f in range(d):
+            b_[f] += lmbda * vv[j, f] * c[j]
+
+
+def _compute_terms_dense_feat_cg_Ap_npy(Ap, p, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    Ap[:] += lmbda * p
+
+
+@nb.njit(["void(f4[::1], f4[::1], f4)", "void(f8[::1], f8[::1], f8)"], cache=True)
+def _compute_terms_dense_feat_cg_Ap(Ap, p, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    Ap[:] += lmbda * p
+
+
+def _compute_terms_dense_feat_cg_b_npy(b_, a, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    b_[:] += lmbda * (weight.T @ a)
+
+
+@nb.njit(
+    [
+        "void(f4[::1], f4[::1], f4[:, ::1], f4)",
+        "void(f8[::1], f8[::1], f8[:, ::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_dense_feat_cg_b(b_, a, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    b_[:] += lmbda * (weight.T @ a)
+
+
+def _compute_terms_sparse_feat_cg_Ap_npy(Ap, p, lmbda):
+    """
+    """
+    _compute_terms_dense_feat_cg_Ap_npy(Ap, p, lmbda)
+
+
+@nb.njit(["void(f4[::1], f4[::1], f4)", "void(f8[::1], f8[::1], f8)"], cache=True)
+def _compute_terms_sparse_feat_cg_Ap(Ap, p, lmbda):
+    """
+    """
+    _compute_terms_dense_feat_cg_Ap(Ap, p, lmbda)
+
+
+def _compute_terms_sparse_feat_cg_b_npy(b_, val, ind, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    # prep data
+    s = val + weight.dtype.type(0.0)
+    ww = weight[ind].copy()
+
+    # compute
+    b_ += lmbda * (ww.T @ s)
+
+
+@nb.njit(
+    [
+        "void(f4[::1], f4[::1], i4[::1], f4[:, ::1], f4)",
+        "void(f8[::1], f8[::1], i4[::1], f8[:, ::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_sparse_feat_cg_b(b_, val, ind, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    # prep data
+    s = val + weight.dtype.type(0.0)
+    ww = weight[ind].copy()
+
+    # compute
+    b_ += lmbda * (ww.T @ s)
+
+
+def _compute_terms_dense_feat_npy(A_, b_, a, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    d = A_.shape[0]
+    A_ += lmbda * np.eye(d, dtype=A_.dtype)
+    b_ += lmbda * (weight.T @ a)
+
+
+@nb.njit(
+    [
+        "void(f4[:, ::1], f4[::1], f4[::1], f4[:, ::1], f4)",
+        "void(f8[:, ::1], f8[::1], f8[::1], f8[:, ::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_dense_feat(A_, b_, a, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    d = A_.shape[0]
+    A_ += lmbda * np.eye(d, dtype=A_.dtype)
+    b_ += lmbda * (weight.T @ a)
+
+
+def _compute_terms_sparse_feat_npy(A_, b_, val, ind, weight, lmbda):
+    """
+    """
+    if lmbda <= 0:
+        return
+
+    d = A_.shape[0]
+
+    # prep data
+    s = val + weight.dtype.type(0.0)
+    ww = weight[ind].copy()
+
+    # compute
+    A_ += lmbda * np.eye(d, dtype=A_.dtype)
+    b_ += lmbda * (ww.T @ s)
+
+
+@nb.njit(
+    [
+        "void(f4[:, ::1], f4[::1], f4[::1], i4[::1], f4[:, ::1], f4)",
+        "void(f8[:, ::1], f8[::1], f8[::1], i4[::1], f8[:, ::1], f8)",
+    ],
+    cache=True,
+)
+def _compute_terms_sparse_feat(A_, b_, val, ind, weight, lmbda):
+    """
+    """
+    if lmbda <= 0 or len(ind) == 0:
+        return
+
+    d = A_.shape[0]
+
+    # prep data
+    s = val + weight.dtype.type(0.0)
+    ww = weight[ind].copy()
+
+    # compute
+    A_ += lmbda * np.eye(d, dtype=A_.dtype)
+    b_ += lmbda * (ww.T @ s)
+
+
+@nb.njit(
+    [
+        "Tuple((f4[::1], f4[::1], f4[::1], f4))("
+        "i8, f4[::1], f4[::1], f4[::1], f4[::1], f4, f8"
+        ")",
+        "Tuple((f8[::1], f8[::1], f8[::1], f8))("
+        "i8, f8[::1], f8[::1], f8[::1], f8[::1], f8, f8"
+        ")",
+    ],
+    cache=True,
+)
+def _cg_update(d, x, Ap, p, r, rsold, eps):
+    """
+    """
+    # standard CG update
+    pAp = r.dtype.type(0.0)
+    for f in range(d):
+        pAp += p[f] * Ap[f]
+    # alpha = rsold / pAp
+    alpha = rsold / max(pAp, eps)
+    for f in range(d):
+        x[f] += alpha * p[f]
+        r[f] -= alpha * Ap[f]
+
+    rsnew = r.dtype.type(0.0)
+    for f in range(d):
+        rsnew += r[f] ** 2
+    p = r + (rsnew / rsold) * p
+    rsold = rsnew
+
+    return x, p, r, rsold
+
+
+def _cg_Ap_aarms_npy(
+    Ap,
+    p,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    V,
+    U_tmp,
+    P,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_s,
+    lmbda_a,
+):
+    """
+    """
+    _compute_terms_wals_cg_Ap_npy(Ap, val_x, ind_x, p, V, VV, 1)
+    _compute_terms_wals_cg_Ap_npy(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y)
+    _compute_terms_wals_cg_Ap_npy(Ap, val_g, ind_g, p, P, PP, lmbda_g)
+    _compute_terms_sparse_feat_cg_Ap_npy(Ap, p, lmbda_s)
+    _compute_terms_dense_feat_cg_Ap_npy(Ap, p, lmbda_a)
+
+
+@nb.njit(
+    [
+        "void("
+        "f4[::1], f4[::1], "
+        "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
+        "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:,::1], f4[:,::1], f4[:,::1], "
+        "f4, f4, f4, f4"
+        ")",
+        "void("
+        "f8[::1], f8[::1], "
+        "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
+        "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:,::1], f8[:,::1], f8[:,::1], "
+        "f8, f8, f8, f8"
+        ")",
+    ],
+    cache=True,
+)
+def _cg_Ap_aarms(
+    Ap,
+    p,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    V,
+    U_tmp,
+    P,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_s,
+    lmbda_a,
+):
+    """
+    """
+    _compute_terms_wals_cg_Ap(Ap, val_x, ind_x, p, V, VV, 1)
+    _compute_terms_wals_cg_Ap(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y)
+    _compute_terms_wals_cg_Ap(Ap, val_g, ind_g, p, P, PP, lmbda_g)
+    _compute_terms_sparse_feat_cg_Ap(Ap, p, lmbda_s)
+    _compute_terms_dense_feat_cg_Ap(Ap, p, lmbda_a)
+
+
+def _cg_b_aarms_npy(
+    b_,
+    a,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    val_s,
+    ind_s,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_s,
+    lmbda_a,
+):
+    """
+    """
+    _compute_terms_wals_cg_b_npy(b_, val_x, ind_x, V, 1)
+    _compute_terms_wals_cg_b_npy(b_, val_y, ind_y, U_tmp, lmbda_y)
+    _compute_terms_wals_cg_b_npy(b_, val_g, ind_g, P, lmbda_g)
+    _compute_terms_sparse_feat_cg_b_npy(b_, val_s, ind_s, W_s, lmbda_s)
+    _compute_terms_dense_feat_cg_b_npy(b_, a, W_a, lmbda_a)
+
+
+@nb.njit(
+    [
+        "void("
+        "f4[::1], f4[::1], "
+        "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
+        "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:,::1], "
+        "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:, ::1], "
+        "f4, f4, f4, f4"
+        ")",
+        "void("
+        "f8[::1], f8[::1], "
+        "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
+        "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:,::1], "
+        "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:, ::1], "
+        "f8, f8, f8, f8"
+        ")",
+    ],
+    cache=True,
+)
+def _cg_b_aarms(
+    b_,
+    a,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    val_s,
+    ind_s,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_s,
+    lmbda_a,
+):
+    """
+    """
+    _compute_terms_wals_cg_b(b_, val_x, ind_x, V, 1)
+    _compute_terms_wals_cg_b(b_, val_y, ind_y, U_tmp, lmbda_y)
+    _compute_terms_wals_cg_b(b_, val_g, ind_g, P, lmbda_g)
+    _compute_terms_sparse_feat_cg_b(b_, val_s, ind_s, W_s, lmbda_s)
+    _compute_terms_dense_feat_cg_b(b_, a, W_a, lmbda_a)
+
+
+# Some utilities
+# =============================================================================
+
+
+@nb.njit(
+    [
+        "Tuple((f4[::1], i4[::1], i8))(i8, f4[::1], i4[::1], i4[::1], f4)",
+        "Tuple((f8[::1], i4[::1], i8))(i8, f8[::1], i4[::1], i4[::1], f8)",
+    ],
+    cache=True,
+)
+def fetch(u, data, indices, indptr, lmbda):
+    """
+    """
+    is_skip = 1
+    if lmbda > 0:
+        u0, u1 = indptr[u], indptr[u + 1]
+        val, ind = data[u0:u1], indices[u0:u1]
+        if u1 > u0:
+            is_skip = 0
+    else:
+        val = np.empty(0, dtype=data.dtype)
+        ind = np.empty(0, dtype=np.int32)
+
+    return val, ind, is_skip
+
+
+# Solvers: mid-level opererations for partial update per entity
+# =============================================================================
+
+
+def partial_wals_vanilla_npy(u, val, ind, U, V, VV, lmbda):
+    """
+    """
+    d = U.shape[1]
+    A_ = lmbda * np.eye(d, dtype=U.dtype)  # already add ridge term
+    b_ = np.zeros((d,), dtype=U.dtype)
+    _compute_terms_wals(A_, b_, val, ind, V, VV, 1)
+
+    # solve system to update factor
+    U[u] = np.linalg.solve(A_, b_)
+
+
+@nb.njit(
+    [
+        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4)",
+        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8)",
+    ],
+    cache=True,
+)
+def partial_wals_vanilla(u, val, ind, U, V, VV, lmbda):
+    """
+    """
+    d = U.shape[1]
+    A_ = lmbda * np.eye(d, dtype=U.dtype)
+    b_ = np.zeros((d,), dtype=U.dtype)
+    _compute_terms_wals(A_, b_, val, ind, V, VV, 1)
+    # solve
+    U[u] = np.linalg.solve(A_, b_)
+
+
+def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20):
+    """
+    """
+    d = U.shape[1]
+    u_ = U[u].copy()  # initial value p0
 
     # compute residual
-    # [r = b - Ap]
-    #    => [r = (UCp + l_x * xW) - (U(C-I)Uv + UUv + (l_x + l) * Iv)]
-    # =============================================
-    # r = -(UUpI + l_x * I).dot(v)
+    # first compute "Ap"
+    r_ = lmbda * u_.copy()  # residual (b - Ap)
+    _compute_terms_wals_cg_Ap_npy(r_, val, ind, u_, V, VV, 1)
+
+    # flip the sign
+    r_ *= -1
+
+    # add "b"
+    _compute_terms_wals_cg_b_npy(r_, val, ind, V, 1)
+
+    p = r_.copy()
+    rsold = r_.dtype.type(0.0)
     for f in range(d):
-        for q in range(d):
-            if f == q:
-                r[f] -= lmbda_x * v[q]
-            r[f] -= UUpI[f, q] * v[q]
-
-    # r += UCp - U(C-I)Uv
-    # <=> r += U(Cp - (C-I)Uv)
-    for j in range(len(c)):
-        uv = r.dtype.type(0.)
-        for f in range(d):
-            uv += uu[j, f] * v[f]
-
-        for f in range(d):
-            r[f] += (c[j] - (c[j] - 1) * uv) * uu[j, f]
-
-    # r += l_x * xW
-    for f in range(d):
-        for h in range(len(x)):
-            r[f] += lmbda_x * x[h] * W[h, f]
-
-    p = r.copy()
-    rsold = r.dtype.type(0.)
-    for f in range(d):
-        rsold += r[f]**2
-    if rsold**.5 < eps:
+        rsold += r_[f] ** 2
+    if rsold ** 0.5 < eps:
         return
 
     for it in range(cg_steps):
-        # calculate Ap = (UCU + (l_x + l)I)p without actually calculate UCU
-        Ap = np.zeros((d,), dtype=V.dtype)
-        for f in range(d):
-            for q in range(d):
-                if f == q:
-                    Ap[f] += lmbda_x * p[q]
-                Ap[f] += UUpI[f, q] * p[q]
+        Ap = lmbda * p.copy()
+        _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, V, VV, 1)
 
-        for j in range(len(c)):
-            up = r.dtype.type(0.)
-            for f in range(d):
-                up += uu[j, f] * p[f]
+        # update
+        u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
 
-            for f in range(d):
-                Ap[f] += uu[j, f] * (c[j] - 1) * up
-
-        # standard CG update
-        pAp = r.dtype.type(0.)
-        for f in range(d):
-            pAp += p[f] * Ap[f]
-        alpha = rsold / pAp
-        for f in range(d):
-            v[f] += alpha * p[f]
-            r[f] -= alpha * Ap[f]
-
-        rsnew = r.dtype.type(0.)
-        for f in range(d):
-            rsnew += r[f]**2
-        if rsnew**.5 < eps:
+        # check convergence
+        if rsold ** 0.5 < eps:
             break
-        p = r + (rsnew / rsold) * p
-        rsold = rsnew
 
     # update
-    V[i] = v
+    U[u] = u_
+
+
+@nb.njit(
+    [
+        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4, i8, f8)",
+        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8, i8, f8)",
+    ],
+    cache=True,
+)
+def partial_wals_vanilla_cg(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20):
+    """
+    """
+    d = U.shape[1]
+    u_ = U[u].copy()  # initial value p0
+
+    # compute residual
+    # first compute "Ap"
+    r_ = lmbda * u_.copy()  # residual (b - Ap)
+    _compute_terms_wals_cg_Ap(r_, val, ind, u_, V, VV, 1)
+
+    # flip the sign
+    r_ *= -1
+
+    # add "b"
+    _compute_terms_wals_cg_b(r_, val, ind, V, 1)
+
+    p = r_.copy()
+    rsold = r_.dtype.type(0.0)
+    for f in range(d):
+        rsold += r_[f] ** 2
+    if rsold ** 0.5 < eps:
+        return
+
+    for it in range(cg_steps):
+        Ap = lmbda * p.copy()
+        _compute_terms_wals_cg_Ap(Ap, val, ind, p, V, VV, 1)
+
+        # update
+        u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
+
+        # check convergence
+        if rsold ** 0.5 < eps:
+            break
+
+    # update
+    U[u] = u_
+
+
+def partial_wals_npy(
+    u,  # target index
+    val_x,
+    ind_x,  # data slices
+    val_y,
+    ind_y,  # data slices
+    val_g,
+    ind_g,  # data slices
+    val_s,
+    ind_s,  # data (sparse feat) slices
+    U,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    A,  # factors & dense feature
+    VV,
+    UU,
+    PP,  # pre-computed covariances
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,  # loss weights
+    lmbda,
+):  # ridge coefficient
+    """
+    """
+    d = U.shape[1]
+    if A.size == 0:
+        a = U[u].copy()  # it's dummy and will not be used
+    else:
+        a = A[u].copy()
+    A_ = lmbda * np.eye(d, dtype=U.dtype)  # already add ridge term
+    b_ = np.zeros((d,), dtype=U.dtype)
+
+    # add terms to A_ and b_
+    _compute_terms_wals_npy(A_, b_, val_x, ind_x, V, VV, 1)
+    _compute_terms_wals_npy(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y)
+    _compute_terms_wals_npy(A_, b_, val_g, ind_g, P, PP, lmbda_g)
+    _compute_terms_sparse_feat_npy(A_, b_, val_s, ind_s, W_s, lmbda_s)
+    _compute_terms_dense_feat_npy(A_, b_, a, W_a, lmbda_a)
+
+    # solve system to update factor
+    U[u] = np.linalg.solve(A_, b_)
+
+
+@nb.njit(
+    [
+        "void("
+        "i8, "
+        "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
+        "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
+        "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
+        "f4, f4, f4, f4, f4"
+        ")",
+        "void("
+        "i8, "
+        "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
+        "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
+        "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
+        "f8, f8, f8, f8, f8"
+        ")",
+    ],
+    cache=True,
+)
+def partial_wals(
+    u,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    val_s,
+    ind_s,
+    U,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    A,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,
+    lmbda,
+):
+    """
+    """
+    d = U.shape[1]
+    if A.size == 0:
+        a = U[u].copy()  # it's dummy and will not be used
+    else:
+        a = A[u].copy()
+    A_ = lmbda * np.eye(d, dtype=U.dtype)
+    b_ = np.zeros((d,), dtype=U.dtype)
+
+    # add terms to A_ and b_
+    _compute_terms_wals(A_, b_, val_x, ind_x, V, VV, 1)
+    _compute_terms_wals(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y)
+    _compute_terms_wals(A_, b_, val_g, ind_g, P, PP, lmbda_g)
+    _compute_terms_sparse_feat(A_, b_, val_s, ind_s, W_s, lmbda_s)
+    _compute_terms_dense_feat(A_, b_, a, W_a, lmbda_a)
+
+    # solve system to update factor
+    U[u] = np.linalg.solve(A_, b_)
+
+
+def partial_wals_cg_npy(
+    u,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    val_s,
+    ind_s,
+    U,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    A,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,
+    lmbda,
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    d = U.shape[1]
+    if A.size == 0:
+        a = U[u].copy()  # it's dummy and will not be used
+    else:
+        a = A[u].copy()
+    u_ = U[u].copy()  # initial value p0
+
+    # compute residual
+    # first compute "Ap"
+    r_ = lmbda * u_.copy()  # residual (b - Ap)
+    _cg_Ap_aarms_npy(
+        r_,
+        u_,
+        val_x,
+        ind_x,
+        val_y,
+        ind_y,
+        val_g,
+        ind_g,
+        V,
+        U_tmp,
+        P,
+        VV,
+        UU,
+        PP,
+        lmbda_y,
+        lmbda_g,
+        lmbda_s,
+        lmbda_a,
+    )
+
+    # flip the sign
+    r_ *= -1
+
+    # add "b"
+    _cg_b_aarms_npy(
+        r_,
+        a,
+        val_x,
+        ind_x,
+        val_y,
+        ind_y,
+        val_g,
+        ind_g,
+        val_s,
+        ind_s,
+        V,
+        U_tmp,
+        P,
+        W_a,
+        W_s,
+        VV,
+        UU,
+        PP,
+        lmbda_y,
+        lmbda_g,
+        lmbda_s,
+        lmbda_a,
+    )
+
+    p = r_.copy()
+    rsold = r_.dtype.type(0.0)
+    for f in range(d):
+        rsold += r_[f] ** 2
+    if rsold ** 0.5 < eps:
+        return
+
+    for it in range(cg_steps):
+        Ap = lmbda * p.copy()
+        _cg_Ap_aarms_npy(
+            Ap,
+            p,
+            val_x,
+            ind_x,
+            val_y,
+            ind_y,
+            val_g,
+            ind_g,
+            V,
+            U_tmp,
+            P,
+            VV,
+            UU,
+            PP,
+            lmbda_y,
+            lmbda_g,
+            lmbda_s,
+            lmbda_a,
+        )
+
+        # update
+        u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
+
+        # check convergence
+        if rsold ** 0.5 < eps:
+            break
+
+    # update
+    U[u] = u_
+
+
+@nb.njit(
+    [
+        "void("
+        "i8, "
+        "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
+        "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
+        "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
+        "f4, f4, f4, f4, f4, "
+        "i8, f8"
+        ")",
+        "void("
+        "i8, "
+        "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
+        "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
+        "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
+        "f8, f8, f8, f8, f8, "
+        "i8, f8"
+        ")",
+    ],
+    cache=True,
+)
+def partial_wals_cg(
+    u,
+    val_x,
+    ind_x,
+    val_y,
+    ind_y,
+    val_g,
+    ind_g,
+    val_s,
+    ind_s,
+    U,
+    V,
+    U_tmp,
+    P,
+    W_a,
+    W_s,
+    A,
+    VV,
+    UU,
+    PP,
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,
+    lmbda,
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    d = U.shape[1]
+    if A.size == 0:
+        a = U[u].copy()  # it's dummy and will not be used
+    else:
+        a = A[u].copy()
+    u_ = U[u].copy()  # initial value p0
+
+    # compute residual
+    # first compute "Ap"
+    r_ = lmbda * u_.copy()  # residual (b - Ap)
+    _cg_Ap_aarms(
+        r_,
+        u_,
+        val_x,
+        ind_x,
+        val_y,
+        ind_y,
+        val_g,
+        ind_g,
+        V,
+        U_tmp,
+        P,
+        VV,
+        UU,
+        PP,
+        lmbda_y,
+        lmbda_g,
+        lmbda_s,
+        lmbda_a,
+    )
+
+    # flip the sign
+    r_ *= -1
+
+    # add "b"
+    _cg_b_aarms(
+        r_,
+        a,
+        val_x,
+        ind_x,
+        val_y,
+        ind_y,
+        val_g,
+        ind_g,
+        val_s,
+        ind_s,
+        V,
+        U_tmp,
+        P,
+        W_a,
+        W_s,
+        VV,
+        UU,
+        PP,
+        lmbda_y,
+        lmbda_g,
+        lmbda_s,
+        lmbda_a,
+    )
+
+    p = r_.copy()
+    rsold = r_.dtype.type(0.0)
+    for f in range(d):
+        rsold += r_[f] ** 2
+    if rsold ** 0.5 < eps:
+        return
+
+    for it in range(cg_steps):
+        Ap = lmbda * p.copy()
+        _cg_Ap_aarms(
+            Ap,
+            p,
+            val_x,
+            ind_x,
+            val_y,
+            ind_y,
+            val_g,
+            ind_g,
+            V,
+            U_tmp,
+            P,
+            VV,
+            UU,
+            PP,
+            lmbda_y,
+            lmbda_g,
+            lmbda_s,
+            lmbda_a,
+        )
+
+        # update
+        u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
+
+        # check convergence
+        if rsold ** 0.5 < eps:
+            break
+
+    # update
+    U[u] = u_
+
+
+# Highest level operations for entire factor update
+# =============================================================================
+
+
+def update_user_npy(
+    data_x,
+    indices_x,
+    indptr_x,
+    data_y,
+    indices_y,
+    indptr_y,
+    data_g,
+    indices_g,
+    indptr_g,
+    data_s,
+    indices_s,
+    indptr_s,
+    U,
+    V,
+    P,
+    W_a,
+    W_s,
+    A,
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,
+    lmbda,
+    solver="cg",
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    # setup some vars and pre-computation
+    N = U.shape[0]
+    U_tmp = U.copy()
+    VV = V.T @ V
+    UU = U.T @ U
+    PP = P.T @ P
+    rnd_idx = np.random.permutation(N)
+
+    # run!
+    for n in range(N):
+        u = rnd_idx[n]
+        val_x, ind_x, skip_x = fetch(u, data_x, indices_x, indptr_x, 1)
+        val_y, ind_y, skip_y = fetch(u, data_y, indices_y, indptr_y, lmbda_y)
+        val_g, ind_g, skip_g = fetch(u, data_g, indices_g, indptr_g, lmbda_g)
+        val_s, ind_s, skip_s = fetch(u, data_s, indices_s, indptr_s, lmbda_s)
+        if skip_x * skip_y * skip_g * skip_s == 1:
+            continue
+
+        if solver == "lu":
+            partial_wals_npy(
+                u,
+                val_x,
+                ind_x,
+                val_y,
+                ind_y,
+                val_g,
+                ind_g,
+                val_s,
+                ind_s,
+                U,
+                V,
+                U_tmp,
+                P,
+                W_a,
+                W_s,
+                A,
+                VV,
+                UU,
+                PP,
+                lmbda_y,
+                lmbda_g,
+                lmbda_a,
+                lmbda_s,
+                lmbda,
+            )
+        elif solver == "cg":
+            partial_wals_cg_npy(
+                u,
+                val_x,
+                ind_x,
+                val_y,
+                ind_y,
+                val_g,
+                ind_g,
+                val_s,
+                ind_s,
+                U,
+                V,
+                U_tmp,
+                P,
+                W_a,
+                W_s,
+                A,
+                VV,
+                UU,
+                PP,
+                lmbda_y,
+                lmbda_g,
+                lmbda_a,
+                lmbda_s,
+                lmbda,
+                cg_steps=cg_steps,
+                eps=eps,
+            )
+
+
+@nb.njit(
+    [
+        nb.void(
+            nb.f4[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f4[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f4[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f4[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4,
+            nb.f4,
+            nb.f4,
+            nb.f4,
+            nb.f4,
+            nb.types.unicode_type,
+            nb.i8,
+            nb.f8,
+        ),
+        nb.void(
+            nb.f8[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f8[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f8[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f8[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8,
+            nb.f8,
+            nb.f8,
+            nb.f8,
+            nb.f8,
+            nb.types.unicode_type,
+            nb.i8,
+            nb.f8,
+        ),
+    ],
+    nogil=True,
+    parallel=True,
+    cache=True,
+)
+def update_user(
+    data_x,
+    indices_x,
+    indptr_x,
+    data_y,
+    indices_y,
+    indptr_y,
+    data_g,
+    indices_g,
+    indptr_g,
+    data_s,
+    indices_s,
+    indptr_s,
+    U,
+    V,
+    P,
+    W_a,
+    W_s,
+    A,
+    lmbda_y,
+    lmbda_g,
+    lmbda_a,
+    lmbda_s,
+    lmbda,
+    solver="cg",
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    # setup some vars and pre-computation
+    N = U.shape[0]
+    U_tmp = U.copy()
+    VV = V.T @ V
+    UU = U.T @ U
+    PP = P.T @ P
+    rnd_idx = np.random.permutation(N)
+
+    # run!
+    for n in nb.prange(N):
+        u = rnd_idx[n]
+        val_x, ind_x, skip_x = fetch(u, data_x, indices_x, indptr_x, 1)
+        val_y, ind_y, skip_y = fetch(u, data_y, indices_y, indptr_y, lmbda_y)
+        val_g, ind_g, skip_g = fetch(u, data_g, indices_g, indptr_g, lmbda_g)
+        val_s, ind_s, skip_s = fetch(u, data_s, indices_s, indptr_s, lmbda_s)
+        if skip_x * skip_y * skip_g * skip_s == 1:
+            continue
+
+        if solver == "lu":
+            partial_wals(
+                u,
+                val_x,
+                ind_x,
+                val_y,
+                ind_y,
+                val_g,
+                ind_g,
+                val_s,
+                ind_s,
+                U,
+                V,
+                U_tmp,
+                P,
+                W_a,
+                W_s,
+                A,
+                VV,
+                UU,
+                PP,
+                lmbda_y,
+                lmbda_g,
+                lmbda_a,
+                lmbda_s,
+                lmbda,
+            )
+
+        elif solver == "cg":
+            partial_wals_cg(
+                u,
+                val_x,
+                ind_x,
+                val_y,
+                ind_y,
+                val_g,
+                ind_g,
+                val_s,
+                ind_s,
+                U,
+                V,
+                U_tmp,
+                P,
+                W_a,
+                W_s,
+                A,
+                VV,
+                UU,
+                PP,
+                lmbda_y,
+                lmbda_g,
+                lmbda_a,
+                lmbda_s,
+                lmbda,
+                cg_steps=cg_steps,
+                eps=eps,
+            )
+
+
+def update_side_npy(
+    data_g,
+    indices_g,
+    indptr_g,
+    P,
+    U,
+    lmbda_g,
+    lmbda,
+    solver="lu",
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    if lmbda_g <= 0:
+        return
+
+    # setup some vars and pre-computation
+    L = P.shape[0]
+    UU = U.T @ U
+    new_lmbda = lmbda_g / max(lmbda, eps)
+    rnd_idx = np.random.permutation(L)
+
+    # run!
+    for n in range(L):
+        l = rnd_idx[n]
+        val_g, ind_g, skip_g = fetch(l, data_g, indices_g, indptr_g, lmbda_g)
+        if skip_g == 1:
+            continue
+
+        if solver == "lu":
+            partial_wals_vanilla_npy(l, val_g, ind_g, P, U, UU, new_lmbda)
+
+        elif solver == "cg":
+            partial_wals_vanilla_cg_npy(
+                l, val_g, ind_g, P, U, UU, new_lmbda, cg_steps=cg_steps, eps=eps
+            )
+
+
+# TODO: this is super uggly, so yeah specs sould be moved to somehwere else for sure
+@nb.njit(
+    [
+        nb.void(
+            nb.f4[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f4[:, ::1],
+            nb.f4[:, ::1],
+            nb.f4,
+            nb.f4,
+            nb.types.unicode_type,
+            nb.i8,
+            nb.f8,
+        ),
+        nb.void(
+            nb.f8[::1],
+            nb.i4[::1],
+            nb.i4[::1],
+            nb.f8[:, ::1],
+            nb.f8[:, ::1],
+            nb.f8,
+            nb.f8,
+            nb.types.unicode_type,
+            nb.i8,
+            nb.f8,
+        ),
+    ],
+    cache=True,
+)
+def update_side(
+    data_g,
+    indices_g,
+    indptr_g,
+    P,
+    U,
+    lmbda_g,
+    lmbda,
+    solver="cg",
+    cg_steps=5,
+    eps=1e-20,
+):
+    """
+    """
+    if lmbda_g <= 0:
+        return
+
+    # setup some vars and pre-computation
+    L = P.shape[0]
+    UU = U.T @ U
+    new_lmbda = lmbda_g / max(lmbda, eps)
+    rnd_idx = np.random.permutation(L)
+
+    # run!
+    for n in nb.prange(L):
+        l = rnd_idx[n]
+        val_g, ind_g, skip_g = fetch(l, data_g, indices_g, indptr_g, lmbda_g)
+        if skip_g == 1:
+            continue
+
+        if solver == "lu":
+            partial_wals_vanilla(l, val_g, ind_g, P, U, UU, new_lmbda)
+        elif solver == "cg":
+            partial_wals_vanilla_cg(
+                l, val_g, ind_g, P, U, UU, new_lmbda, cg_steps=cg_steps, eps=eps
+            )
+
+
+@nb.njit(
+    [
+        "void(f4[:,::1], f4[:,::1], f4[:,::1], f4, f4, f4)",
+        "void(f8[:,::1], f8[:,::1], f8[:,::1], f8, f8, f8)",
+    ],
+    cache=True,
+)
+def update_weight_dense(U, A, W_a, lmbda_a, lmbda, eps):
+    """
+    """
+    if lmbda_a <= 0:
+        return
+
+    new_lmbda = lmbda_a / max(lmbda, eps)
+    d = A.shape[1]
+    A_ = A.T @ A + new_lmbda * np.eye(d, dtype=W_a.dtype)
+    B_ = A.T @ U
+    W_a[:, :] = np.linalg.solve(A_, B_)

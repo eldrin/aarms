@@ -8,13 +8,13 @@ def ndcg(actual, predicted, k=10):
         predicted = predicted[:k]
     actual = set(actual)
 
-    dcg = 0.
-    idcg = 0.
+    dcg = 0.0
+    idcg = 0.0
     for i, p in enumerate(predicted):
         if p in actual:
-            dcg += 1. / np.log2(i + 2.)
+            dcg += 1.0 / np.log2(i + 2.0)
         if i < len(actual):
-            idcg += 1. / np.log2(i + 2.)
+            idcg += 1.0 / np.log2(i + 2.0)
 
     if len(actual) == 0:
         return None
