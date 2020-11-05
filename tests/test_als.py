@@ -40,7 +40,7 @@ class TestALS(TestAARMS):
             try:
                 als = ALS(k = 6,
                           l2 = 0.,
-                          n_iters = 30,
+                          n_iters = 35,
                           cg_steps = 5,
                           eps = 1e-20,
                           transform = transform,
