@@ -1,5 +1,4 @@
 import numpy as np
-from sklearn.decomposition import TruncatedSVD
 
 from .base import BaseRecommender, FactorizationMixin
 from ._rsvd import rsvd
