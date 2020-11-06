@@ -1,6 +1,6 @@
 # ***AARMS*** : Attribute-Aware Recommender ModelS
 
-https://travis-ci.org/eldrin/aarms.svg?branch=master
+[![Build Status](https://travis-ci.org/eldrin/aarms.svg?branch=master)](https://travis-ci.org/eldrin/aarms)
 
 It aims for providing a set of attribute-aware recommender models running in reasonably fast execution time. Right now, the main driver is a linear model using Alternating Least Square (ALS) algorithm, which allows to plug in diverse form of side information in various format (user/item similarity, dense feature, sparse feature).
 
