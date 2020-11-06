@@ -1,6 +1,8 @@
 # ***AARMS*** : Attribute-Aware Recommender ModelS
 
-It aims for providing a set of attribute-aware recommender models running in reasonably fast execution time.
+[![Build Status](https://travis-ci.org/eldrin/aarms.svg?branch=master)](https://travis-ci.org/eldrin/aarms)
+
+It aims for providing a set of attribute-aware recommender models running in reasonably fast execution time. Right now, the main driver is a linear model using Alternating Least Square (ALS) algorithm, which allows to plug in diverse form of side information in various format (user/item similarity, dense feature, sparse feature).
 
 
 ## Getting Started
@@ -13,10 +15,33 @@ $ pip install git+https://github.com/eldrin/aarms.git@master
 
 ### Quick Look
 
-TBD
-
 ```python
-blah blah
+from aarms.models import ALS
+
+n_components = 5
+lmbda = 1  # loss weight per each side information
+als = ALS(n_components)
+
+# Assume data loaded
+# ===================
+# `user_item` is (N x M) user-item interaction matrix
+# `user_user` is (N x N) user-user similarity sparse matrix
+# `user_dense_feature` is (N x D) user feature dense matrix
+# `item_other` is (M x R) item-other entitiy (i.e. tag) sparse matrix
+# `item_sparse_feature` is (M x S) item feature sparse matrix
+
+# fit factors
+als.fit(
+  user_item,
+  user_user = user_user,
+  user_dense_feature = user_dense_feature,
+  item_other = item_other,
+  item_sparse_feature = user_sparse_feature,
+  lmbda_user_user = lmbda,
+  lmbda_user_dense_feature = lmbda,
+  lmbda_item_other = lmbda,
+  lmbda_item_sparse_feature = lmbda
+)
 ```
 
 ## Current Status & Contributing
@@ -35,3 +60,5 @@ This project is licensed under the MIT License - see the LICENSE.md file for det
 
 
 ## Reference
+
+This package refers much to [implicit](https://github.com/benfred/implicit) package. Please check the package if you are looking for feature-rich, more scalable version supporting the user-item matrix decomposition for recommender system!
