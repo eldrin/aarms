@@ -11,7 +11,7 @@ import numba as nb
 def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -35,7 +35,7 @@ def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda):
 def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -63,7 +63,7 @@ def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda):
 def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -84,7 +84,7 @@ def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda):
 def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -109,7 +109,7 @@ def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda):
 def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -130,7 +130,7 @@ def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda):
 def _compute_terms_wals_cg_b(b_, val, ind, factors, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     # prep data
@@ -291,7 +291,7 @@ def _compute_terms_sparse_feat_npy(A_, b_, val, ind, weight, lmbda):
 def _compute_terms_sparse_feat(A_, b_, val, ind, weight, lmbda):
     """
     """
-    if lmbda <= 0 or len(ind) == 0:
+    if lmbda <= 0:
         return
 
     d = A_.shape[0]

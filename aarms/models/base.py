@@ -1,6 +1,8 @@
+from collections.abc import Iterable
+
 import numpy as np
 from ..utils import argpart_sort, slice_row_sparse
-from ..metric import ndcg
+from ..evaluation.metrics import ndcg
 
 
 class BaseRecommender:
@@ -15,23 +17,31 @@ class BaseRecommender:
         """"""
         raise NotImplementedError()
 
-    def validate(self, user_item, valid_user_item, n_tests=2000, topk=100):
+    def validate(self, user_item, valid_user_item,
+                 targets=None, n_tests=2000, topk=100):
         """"""
-        scores = np.zeros((n_tests,))
-        if n_tests >= user_item.shape[0]:
-            targets = range(user_item.shape[0])
-        else:
-            targets = np.random.choice(user_item.shape[0], n_tests, False)
+        if targets is not None and isinstance(targets, Iterable):
+            if len(targets) <= 0:
+                raise ValueError('[ERROR] target length should be positive!')
 
+        else:
+            if n_tests >= user_item.shape[0]:
+                targets = range(user_item.shape[0])
+            else:
+                targets = np.random.choice(user_item.shape[0], n_tests, False)
+
+        scores = 0.
+        count = 0.
         for i, u in enumerate(targets):
             true, rel = slice_row_sparse(valid_user_item, u)
             if len(true) == 0:
                 continue
 
             pred = self.predict(u, user_item, topk)
-            scores[i] = ndcg(true, pred, topk)
+            scores += ndcg(true, pred, topk)
+            count += 1.
 
-        return np.mean(scores)
+        return scores / count
 
 
 class BaseItemFeatRecommender(BaseRecommender):
