@@ -42,9 +42,8 @@ class TestALS(TestAARMS):
                 try:
                     als = ALS(k = 6,
                               l2 = 0.,
-                              n_iters = 20,
+                              n_iters = 15,
                               cg_steps = 5,
-                              eps = 1e-20,
                               transform = transform,
                               dtype = dtype)
                     als.fit(X)
@@ -181,9 +180,8 @@ class TestALS(TestAARMS):
                 try:
                     als = ALS(k = 6,
                               l2 = 0.,
-                              n_iters = 30,
+                              n_iters = 15,
                               cg_steps = 5,
-                              eps = 1e-20,
                               transform = transform,
                               dtype = dtype)
                     als.fit(

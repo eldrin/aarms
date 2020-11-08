@@ -17,7 +17,9 @@ setup(name='aarms',
       classifiers=[
         'Development Status :: 3 - Alpha',
         'License :: OSI Approved :: MIT License',
+        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         'Topic :: Scientific/Engineering :: Information Analysis'
       ],
       keywords='Attribute-Aware Recommender ModelS',
@@ -28,6 +30,5 @@ setup(name='aarms',
       # packages=['aarms'],
       packages=find_packages('.'),
       install_requires=requirements(),
-      test_suite='nose.collector',
-      tests_require=['nose', 'nose-cover3'],
+      test_suite='tests',
       zip_safe=False)
