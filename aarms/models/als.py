@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import warnings
 from functools import partial
 
 import numpy as np
@@ -7,12 +8,12 @@ from scipy import sparse as sp
 
 from tqdm import tqdm
 
+from ..matrix import InteractionMatrix, SparseFeatureMatrix, DenseFeatureMatrix
 from ..utils import check_blas_config, check_spmat, check_densemat
 from ._als import update_side as update_side
 from ._als import update_user as update_user
 from ._als import update_weight_dense
 from .base import BaseRecommender, FactorizationMixin
-from .transform import linear_confidence, log_confidence, sppmi
 
 
 class ALS(FactorizationMixin, BaseRecommender):
@@ -22,45 +23,30 @@ class ALS(FactorizationMixin, BaseRecommender):
         init=0.001,
         l2=0.0001,
         n_iters=15,
-        alpha=5,
-        eps=0.5,
-        kappa=1,
-        transform=linear_confidence,
         dtype="float32",
         solver="cg",
         cg_steps=5,
-        n_jobs=-1,
+        n_jobs=-1
     ):
         """"""
         BaseRecommender.__init__(self)
         FactorizationMixin.__init__(self, dtype, k, init)
 
         self.l2 = self.f_dtype(l2)
-        self.alpha = self.f_dtype(alpha)
-        self.eps = self.f_dtype(eps)
-        self.kappa = self.f_dtype(kappa)
         self.n_iters = n_iters
         self.n_jobs = n_jobs
         self.solver = solver
         self.cg_steps = cg_steps
 
         check_blas_config()
-        if n_jobs == -1:
-            # nb.set_num_threads(mp.cpu_count())
-            nb.config.NUMBA_NUM_THREADS = mp.cpu_count()
+        if n_jobs > nb.config.NUMBA_NUM_THREADS:
+            warnings.warn('n_jobs should be set lower than the number of cores! '
+                          'setting it to the number...')
+            self.n_jobs = nb.config.NUMBA_NUM_THREADS
+        elif n_jobs == -1:
+            self.n_jobs = nb.config.NUMBA_NUM_THREADS
         else:
-            # nb.set_num_threads(self.n_jobs)
-            nb.config.NUMBA_NUM_THREADS = n_jobs
-
-        # set transform function
-        if transform == linear_confidence:
-            self._transform = partial(transform, alpha=self.alpha)
-        elif transform == log_confidence:
-            self._transform = partial(transform, alpha=self.alpha, eps=self.eps)
-        elif transform == sppmi:
-            self._transform = partial(sppmi, k=self.kappa)
-        else:
-            raise ValueError("[ERROR] not supported transform given!")
+            self.n_jobs = n_jobs
 
     def __repr__(self):
         return "ALS@{:d}".format(self.k)
@@ -115,94 +101,55 @@ class ALS(FactorizationMixin, BaseRecommender):
             valid_user_item (sp.csr_matrix or None): validation set
             verbose (bool): verbosity
         """
-        # put lambdas to trunc
-        lmbdas = {
-            "user_user": lmbda_user_user,
-            "user_other": lmbda_user_other,
-            "user_dense_feature": lmbda_user_dense_feature,
-            "user_sparse_feature": lmbda_user_sparse_feature,
-            "item_item": lmbda_item_item,
-            "item_other": lmbda_item_other,
-            "item_dense_feature": lmbda_item_dense_feature,
-            "item_sparse_feature": lmbda_item_sparse_feature,
+        # put inputs to trunc
+        inputs = {
+            "user_item": {'data': user_item, 'lambda': self.l2},
+            "valid_user_item": {'data': valid_user_item, 'lmbda': self.l2},
+            "user_user": {'data': user_user, 'lambda': lmbda_user_user},
+            "user_other": {'data': user_other, 'lambda': lmbda_user_other},
+            "user_dense_feature": {'data': user_dense_feature,
+                                   'lambda': lmbda_user_dense_feature},
+            "user_sparse_feature": {'data': user_sparse_feature,
+                                    'lambda': lmbda_user_sparse_feature},
+            "item_item": {'data': item_item, 'lambda': lmbda_item_item},
+            "item_other": {'data': item_other, 'lambda': lmbda_item_other},
+            "item_dense_feature": {'data': item_dense_feature,
+                                   'lambda': lmbda_item_dense_feature},
+            "item_sparse_feature": {'data': item_sparse_feature,
+                                    'lambda': lmbda_item_sparse_feature}
         }
 
         # check items
-        (
-            user_item,
-            valid_user_item,
-            user_user,
-            user_other,
-            user_sparse_feature,
-            user_dense_feature,
-            item_item,
-            item_other,
-            item_sparse_feature,
-            item_dense_feature,
-        ) = self._check_inputs(
-            lmbdas,
-            user_item,
-            user_user,
-            user_other,
-            user_dense_feature,
-            user_sparse_feature,
-            item_item,
-            item_other,
-            item_dense_feature,
-            item_sparse_feature,
-            valid_user_item,
-        )
+        inputs = self._check_inputs(inputs)
 
         # initialize embeddings
         self._init_embeddings(
-            user_item,
-            user_other,
-            user_dense_feature,
-            user_sparse_feature,
-            item_other,
-            item_dense_feature,
-            item_sparse_feature,
+            inputs['user_item']['data'],
+            inputs['user_other']['data'],
+            inputs['user_dense_feature']['data'],
+            inputs['user_sparse_feature']['data'],
+            inputs['item_other']['data'],
+            inputs['item_dense_feature']['data'],
+            inputs['item_sparse_feature']['data'],
         )
 
-        # preprocess data
-        user_item = self._transform(user_item.astype(self.dtype))
+        # compute some transposes
+        inputs['item_user'] = {}
+        inputs['user_other_t'] = {}
+        inputs['item_other_t'] = {}
+        inputs['item_user']['data'] = inputs['user_item']['data'].transpose()
+        inputs['user_other_t']['data'] = inputs['user_other']['data'].transpose()
+        inputs['item_other_t']['data'] = inputs['item_other']['data'].transpose()
 
         # fit model
-        self._fit(
-            user_item,
-            valid_user_item,
-            user_user,
-            user_other,
-            user_sparse_feature,
-            user_dense_feature,
-            item_item,
-            item_other,
-            item_sparse_feature,
-            item_dense_feature,
-            lmbdas,
-            verbose,
-        )
+        self._fit(inputs, valid_user_item, verbose)
 
-    def _fit(
-        self,
-        user_item,
-        valid_user_item,
-        user_user,
-        user_other,
-        user_sparse_feature,
-        user_dense_feature,
-        item_item,
-        item_other,
-        item_sparse_feature,
-        item_dense_feature,
-        lmbdas,
-        verbose,
-    ):
+    def _fit(self, inputs, valid_user_item, verbose):
         """
         """
-        item_user = user_item.T.tocsr()
-        user_other_t = user_other.T.tocsr()
-        item_other_t = item_other.T.tocsr()
+        # set threading
+        if self.n_jobs >= 1:
+            nb.set_num_threads(self.n_jobs)
 
         # set the number of threads for training
         dsc_tmp = "[vacc={:.4f}]"
@@ -211,29 +158,12 @@ class ALS(FactorizationMixin, BaseRecommender):
         ) as p:
 
             for n in range(self.n_iters):
-                self._update_factor(
-                    "user",
-                    user_item,
-                    user_user,
-                    user_other,
-                    user_other_t,
-                    user_dense_feature,
-                    user_sparse_feature,
-                    lmbdas,
-                )
-                self._update_factor(
-                    "item",
-                    item_user,
-                    item_item,
-                    item_other,
-                    item_other_t,
-                    item_dense_feature,
-                    item_sparse_feature,
-                    lmbdas,
-                )
+                self._update_factor("user", inputs)
+                self._update_factor("item", inputs)
 
-                if valid_user_item.size > 0:
-                    score = self.validate(user_item, valid_user_item)
+                if inputs['valid_user_item']['data'].size > 0:
+                    score = self.validate(inputs['user_item']['data']._data,
+                                          inputs['valid_user_item']['data']._data)
                     p.set_description(dsc_tmp.format(score))
                 p.update(1)
 
@@ -242,170 +172,126 @@ class ALS(FactorizationMixin, BaseRecommender):
             name: fac for name, fac in self.embeddings_.items() if fac.size > 0
         }
 
-    def _update_factor(
-        self,
-        target_entity,
-        user_item,
-        user_user,
-        user_other,
-        user_other_t,
-        user_dense_feature,
-        user_sparse_feature,
-        lmbdas,
-    ):
+        # set the number of threads to the default
+        if self.n_jobs >= 1:
+            nb.set_num_threads(nb.config.NUMBA_NUM_THREADS)
+
+    def _update_factor(self, target_entity, inputs, eps=1e-20):
         """
         """
+        eps = self.f_dtype(eps)
         opposite_entity = "item" if target_entity == "user" else "user"
+        X = inputs[f"{target_entity}_{opposite_entity}"]
+        Y = inputs[f"{target_entity}_{target_entity}"]
+        G = inputs[f'{target_entity}_other']
+        Gt = inputs[f'{target_entity}_other_t']
+        A = inputs[f'{target_entity}_dense_feature']
+        S = inputs[f'{target_entity}_sparse_feature']
 
         update_user(
-            user_item.data,
-            user_item.indices,
-            user_item.indptr,
-            user_user.data,
-            user_user.indices,
-            user_user.indptr,
-            user_other.data,
-            user_other.indices,
-            user_other.indptr,
-            user_sparse_feature.data,
-            user_sparse_feature.indices,
-            user_sparse_feature.indptr,
+            X['data']._data.data,
+            X['data']._data.indices,
+            X['data']._data.indptr,
+            Y['data']._data.data,
+            Y['data']._data.indices,
+            Y['data']._data.indptr,
+            G['data']._data.data,
+            G['data']._data.indices,
+            G['data']._data.indptr,
+            S['data']._data.data,
+            S['data']._data.indices,
+            S['data']._data.indptr,
             self.embeddings_[f"{target_entity}"],
             self.embeddings_[f"{opposite_entity}"],
             self.embeddings_[f"{target_entity}_other"],
             self.embeddings_[f"{target_entity}_dense_feature"],
             self.embeddings_[f"{target_entity}_sparse_feature"],
-            user_dense_feature,
-            lmbdas[f"{target_entity}_{target_entity}"],
-            lmbdas[f"{target_entity}_other"],
-            lmbdas[f"{target_entity}_dense_feature"],
-            lmbdas[f"{target_entity}_sparse_feature"],
+            A['data']._data,
+            Y['lambda'],
+            G['lambda'],
+            A['lambda'],
+            S['lambda'],
             self.l2,
+            X['data'].is_sampled_explicit,
+            Y['data'].is_sampled_explicit,
+            G['data'].is_sampled_explicit,
             self.solver,
             self.cg_steps,
-            self.eps,
+            eps,
         )
         update_side(
-            user_other_t.data,
-            user_other_t.indices,
-            user_other_t.indptr,
+            Gt['data']._data.data,
+            Gt['data']._data.indices,
+            Gt['data']._data.indptr,
             self.embeddings_[f"{target_entity}_other"],
             self.embeddings_[f"{target_entity}"],
-            lmbdas[f"{target_entity}_other"],
+            G['lambda'],
             self.l2,
+            G['data'].is_sampled_explicit,
             self.solver,
             self.cg_steps,
-            self.eps,
+            eps,
         )
         update_weight_dense(
             self.embeddings_[f"{target_entity}"],
-            user_dense_feature,
+            A['data']._data,
             self.embeddings_[f"{target_entity}_dense_feature"],
-            lmbdas[f"{target_entity}_dense_feature"],
+            A['lambda'],
             self.l2,
-            self.eps,
+            eps,
         )
 
     def _get_score(self, user):
         """"""
         return self.embeddings_["user"][user] @ self.embeddings_["item"].T
 
-    def _check_inputs(
-        self,
-        lmbdas,
-        user_item,
-        user_user=None,
-        user_other=None,
-        user_dense_feature=None,
-        user_sparse_feature=None,
-        item_item=None,
-        item_other=None,
-        item_dense_feature=None,
-        item_sparse_feature=None,
-        valid_user_item=None,
-    ):
+    def _check_inputs(self, inputs):
         """
         """
         # prepare empty csr matrix for placeholder
-        dummy = sp.csr_matrix((0, 0), dtype=self.dtype)
-        dummy_dense = np.array([[]], dtype=self.dtype)
+        for name, term_data in inputs.items():
+            data = term_data['data']
 
-        # building checking target
-        to_check = [
-            (user_item, "user_item"),
-            (valid_user_item, "valid_user_item"),
-            (user_user, "user_user"),
-            (user_other, "user_other"),
-            (user_sparse_feature, "user_sparse_feature"),
-            (item_item, "item_item"),
-            (item_other, "item_other"),
-            (item_sparse_feature, "item_sparse_feature"),
-            (user_dense_feature, "user_dense_feature"),
-            (item_dense_feature, "item_dense_feature"),
-        ]
+            if 'dense' not in name:
+                # either interaction or sparse feature
+                if 'sparse' in name:
+                    # sparse feature
+                    if not isinstance(data, SparseFeatureMatrix):
+                        data = SparseFeatureMatrix(data, self.dtype)
+                else:
+                    # interaction matrix
+                    if not isinstance(data, InteractionMatrix):
+                        data = InteractionMatrix(data, dtype=self.dtype)
+            else:
+                # dense feature
+                if not isinstance(data, DenseFeatureMatrix):
+                    data = DenseFeatureMatrix(data, dtype=self.dtype)
 
-        # check lambdas
-        for mat, name in to_check:
-            if mat is None:
-                lmbdas[name] = -1
-
-        # check sparse features
-        (
-            user_item,
-            valid_user_item,
-            user_user,
-            user_other,
-            user_sparse_feature,
-            item_item,
-            item_other,
-            item_sparse_feature,
-        ) = [
-            check_spmat(mat, name, dtype=self.dtype)
-            if mat is not None
-            else dummy.copy()  # fill the not existing members with dummy
-            for mat, name in [e for e in to_check if "dense" not in e[1]]
-        ]
-
-        # check dense features
-        user_dense_feature = (
-            check_densemat(user_dense_feature, dtype=self.dtype)
-            if user_dense_feature is not None
-            else dummy_dense.copy()
-        )
-        item_dense_feature = (
-            check_densemat(item_dense_feature, dtype=self.dtype)
-            if item_dense_feature is not None
-            else dummy_dense.copy()
-        )
+            # update data
+            term_data.update({'data': data})
 
         # check size of the data
-        if valid_user_item.size > 0:
-            assert user_item.shape == valid_user_item.shape
+        for name, term_data in inputs.items():
+            data = term_data['data']
 
-        for mat in (user_user, item_item):
-            if mat.size > 0:
-                assert mat.shape[0] == mat.shape[1]
+            if name == 'valid_user_item' and data.size > 0:
+                assert inputs['user_item']['data'].shape == data.shape
 
-        for mat in (user_user, user_other, user_sparse_feature, user_dense_feature):
-            if mat.size > 0:
-                assert mat.shape[0] == user_item.shape[0]
+            if name in {'user_user', 'item_item'}:
+                if data.size > 0:
+                    assert data.shape[0] == data.shape[1]
 
-        for mat in (item_item, item_other, item_sparse_feature, item_dense_feature):
-            if mat.size > 0:
-                assert mat.shape[0] == user_item.shape[1]
+            if name in {'user_user', 'user_other',
+                        'user_sparse_feature', 'user_dense_feature'}:
+                if data.size > 0:
+                    assert inputs['user_item']['data'].shape[0] == data.shape[0]
 
-        return (
-            user_item,
-            valid_user_item,
-            user_user,
-            user_other,
-            user_sparse_feature,
-            user_dense_feature,
-            item_item,
-            item_other,
-            item_sparse_feature,
-            item_dense_feature,
-        )
+            if name in {'item_item', 'item_other',
+                        'item_sparse_feature', 'item_dense_feature'}:
+                if data.size > 0:
+                    assert inputs['user_item']['data'].shape[1] == data.shape[0]
+
+        return inputs
 
     def _init_embeddings(
         self,

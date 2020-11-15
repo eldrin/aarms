@@ -1,5 +1,5 @@
 os: linux
-disst:
+dist:
     - xenial
     - bionic
     - focal

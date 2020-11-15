@@ -46,12 +46,18 @@ als.fit(
 
 ## Current Status & Contributing
 
-As an pre-alpha version, currently we mostly provide the API specialized on the recommendation. Although we plan to extend the API as general as possible in the near future. If interested, feel free to send pull requests and drop issues. We are more than happy to listen what do you think.
-
+As a pre-alpha version, currently, we mostly provide the API specialized on the recommendation. However, we plan to extend the API as general as possible soon. If interested, feel free to send pull requests and drop issues. We are more than happy to listen to your thoughts and ideas.
 
 ## Authors
 
 - Jaehun Kim
+
+## TODOs
+
+- [ ] Symmetric ALS (with features)
+- [ ] refactoring and code wrangling
+- [ ] code coverage
+  - [ ] adding more tests
 
 ## License
 

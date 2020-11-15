@@ -10,6 +10,7 @@ from scipy.stats import kendalltau
 from aarms.models.als import ALS
 from aarms.models.transform import (linear_confidence,
                                     log_confidence, sppmi)
+from aarms.matrix import InteractionMatrix
 from base_test import TestAARMS
 
 
@@ -21,13 +22,7 @@ class TestALS(TestAARMS):
         This test function refers a lot from::
             https://github.com/benfred/implicit/blob/master/tests/als_test.py
         """
-        X = sp.csr_matrix([[1, 1, 0, 1, 0, 0],
-                           [0, 1, 1, 1, 0, 0],
-                           [1, 0, 1, 0, 0, 0],
-                           [1, 1, 0, 0, 0, 0],
-                           [0, 0, 1, 1, 0, 1],
-                           [0, 1, 0, 0, 0, 1],
-                           [0, 0, 0, 0, 1, 1]])
+        X = self._gen_data()[0]
 
         cases = [
             (solver, dtype, transform)
@@ -37,16 +32,20 @@ class TestALS(TestAARMS):
         ]
 
         for solver, dtype, transform in cases:
+
+            # transform input data
+            X_ = InteractionMatrix(X, transform_fn=transform, dtype=dtype)
+            X_.transform()
+
             counter = 0
             for _ in range(n_trials):
                 try:
                     als = ALS(k = 6,
                               l2 = 0.,
                               n_iters = 15,
-                              cg_steps = 5,
-                              transform = transform,
+                              cg_steps = 3,
                               dtype = dtype)
-                    als.fit(X)
+                    als.fit(X_)
 
                 except Exception as e:
                     self.fail(msg = "failed for basic user-item factorization: "
@@ -55,7 +54,7 @@ class TestALS(TestAARMS):
 
                 Xhat = als.embeddings_['user'] @ als.embeddings_['item'].T
                 try:
-                    self._compare_recon(X, Xhat, thresh=1e-2,
+                    self._compare_recon(X, Xhat, thresh=1e-3,
                                         **{'solver': solver, 'dtype': dtype,
                                            'transform': transform})
                 except Exception as e:
@@ -65,87 +64,13 @@ class TestALS(TestAARMS):
                     else:
                         self.fail(msg=e)
 
-
-    def test_factorize_sideinfo(self, lmbda=.3, thres=.6, n_trials=3):
+    def test_factorize_sideinfo(self, lmbda=.3, thres=.7, n_trials=2):
         """ this is an extension of the above test
 
         it check all the combination of possible scenarios
         where various side information data are given
         """
-        # user-item
-        X = sp.csr_matrix([[1, 1, 0, 1, 0, 0],
-                           [0, 1, 1, 1, 0, 0],
-                           [1, 0, 1, 0, 0, 0],
-                           [1, 1, 0, 0, 0, 0],
-                           [0, 0, 1, 1, 0, 1],
-                           [0, 1, 0, 0, 0, 1],
-                           [0, 0, 0, 0, 1, 1]])
-        # user-user
-        Y = sp.csr_matrix([[1, 1, 1, 0, 0, 0, 1],
-                           [0, 0, 1, 1, 1, 0, 0],
-                           [1, 0, 1, 0, 1, 0, 1],
-                           [0, 1, 0, 1, 0, 1, 0],
-                           [0, 1, 0, 1, 1, 0, 0],
-                           [1, 1, 0, 0, 1, 0, 0],
-                           [1, 0, 0, 0, 1, 0, 1]])
-        # item-item
-        Z = sp.csr_matrix([[0, 1, 0, 0, 1, 0],
-                           [1, 0, 0, 1, 1, 1],
-                           [0, 0, 1, 0, 0, 1],
-                           [0, 1, 1, 1, 0, 0],
-                           [1, 1, 0, 0, 0, 0],
-                           [1, 0, 1, 1, 1, 1]])
-
-        # user-other
-        G = sp.csr_matrix([[0, 1, 0, 1],
-                           [1, 1, 0, 0],
-                           [0, 1, 1, 1],
-                           [1, 0, 0, 1],
-                           [0, 0, 1, 1],
-                           [1, 0, 1, 0],
-                           [0, 1, 0, 1]])
-
-        # item-other
-        H = sp.csr_matrix([[0, 1, 1, 0],
-                           [1, 0, 1, 0],
-                           [0, 0, 1, 0],
-                           [0, 0, 0, 1],
-                           [1, 1, 0, 0],
-                           [0, 0, 1, 1]])
-
-        # user-sparse-feature
-        S = sp.csr_matrix([[0, 1, 1],
-                           [1, 1, 0],
-                           [1, 0, 1],
-                           [0, 1, 0],
-                           [0, 0, 1],
-                           [1, 1, 0],
-                           [1, 0, 0]])
-
-        # item-sparse-feature
-        R = sp.csr_matrix([[1, 1, 0, 1],
-                           [1, 0, 0, 1],
-                           [1, 0, 0, 0],
-                           [0, 0, 1, 0],
-                           [1, 0, 0, 1],
-                           [0, 0, 1, 0]])
-
-        # user-dense-feature
-        A = np.array([[0, 1, 1],
-                      [1, 0, 1],
-                      [0, 0, 1],
-                      [1, 1, 0],
-                      [0, 1, 0],
-                      [1, 0, 1],
-                      [0, 0, 0]])
-
-        # item-dense-feature
-        B = np.array([[0, 1],
-                      [0, 1],
-                      [1, 0],
-                      [0, 0],
-                      [1, 0],
-                      [1, 1]])
+        X, Y, Z, G, H, S, R, A, B = self._gen_data()
 
         cases = [
             (
@@ -174,18 +99,21 @@ class TestALS(TestAARMS):
                 user_sparse_feature, item_sparse_feature,
                 user_dense_feature, item_dense_feature
             ) = case
+
+            # trasnform data
+            X_ = InteractionMatrix(X, transform_fn=transform, dtype=dtype)
+            X_.transform()
+
             counter = 0
             for _ in range(n_trials):
-
                 try:
                     als = ALS(k = 6,
                               l2 = 0.,
                               n_iters = 15,
-                              cg_steps = 5,
-                              transform = transform,
+                              cg_steps = 3,
                               dtype = dtype)
                     als.fit(
-                        X,
+                        X_,
                         user_user=user_user,
                         item_item=item_item,
                         user_other=user_other,
@@ -228,6 +156,57 @@ class TestALS(TestAARMS):
                         break
                     self.assertTrue(res > thres)
 
+                except Exception as e:
+                    counter += 1
+                    if counter <= n_trials:
+                        continue
+                    else:
+                        self.fail(msg=e)
+
+    def test_vanilla_sampled_explicit(self, n_trials=1, rand_state=1234):
+        """
+        """
+        R = self._gen_sampled_explicit_data()
+
+        # gen data
+        cases = [
+            (solver, dtype)
+            for dtype in (np.float32, np.float64)
+            for solver in ('cg', 'lu')
+        ]
+
+        for solver, dtype in cases:
+
+            # transform input data
+            R_ = InteractionMatrix(R, is_implicit=False, dtype=dtype)
+
+            counter = 0
+            for _ in range(n_trials):
+                try:
+                    als = ALS(k = 1,
+                              l2 = 0,
+                              n_iters = 10,
+                              cg_steps = 3,
+                              dtype = dtype)
+                    als.fit(R_)
+
+                except Exception as e:
+                    self.fail(msg = "failed for basic user-item factorization: "
+                                    f"{e}, solver={solver}, dtype={dtype}, "
+                                    f"transform={transform}")
+
+                Rhat = als.embeddings_['user'] @ als.embeddings_['item'].T
+                try:
+                    # compute rmse
+                    rmse = 0.
+                    for i, j in zip(M.row, M.col):
+                        v = X[i, j]  # masked value
+                        vhat = Rhat[i, j]  # predicted value
+                        rmse += (v - vhat)**2
+                    rmse /= M.nnz
+                    self.assertAlmostEqual(0, rmse, thresh=1e-4,
+                                           **{'solver': solver, 'dtype': dtype,
+                                              'transform': transform})
                 except Exception as e:
                     counter += 1
                     if counter <= n_trials:
