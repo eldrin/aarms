@@ -8,7 +8,7 @@ import numba as nb
 # =============================================================================
 
 
-def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda):
+def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda, is_smp_exp=False):
     """
     """
     if lmbda <= 0:
@@ -22,17 +22,19 @@ def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda):
     b_ += lmbda * (vv.T @ c)
 
     # compute "A" in "Ax=b"
-    A_ += lmbda * (covar + vv.T @ np.diag(c - 1) @ vv)
-
+    if is_smp_exp:
+        A_ += lmbda * vv.T @ vv
+    else:
+        A_ += lmbda * (covar + vv.T @ np.diag(c - 1) @ vv)
 
 @nb.njit(
     [
-        "void(f4[:, ::1], f4[::1], f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4)",
-        "void(f8[:, ::1], f8[::1], f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8)",
+        "void(f4[:, ::1], f4[::1], f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4, b1)",
+        "void(f8[:, ::1], f8[::1], f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8, b1)",
     ],
     cache=True,
 )
-def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda):
+def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda, is_smp_exp):
     """
     """
     if lmbda <= 0:
@@ -49,18 +51,24 @@ def _compute_terms_wals(A_, b_, val, ind, factors, covar, lmbda):
             b_[f] += lmbda * vv[j, f] * c[j]
 
     # compute 'A'
-    for f in range(d):
-        for q in range(f, d):
-            A_[f, q] += lmbda * covar[f, q]
-            for j in range(len(c)):
-                A_[f, q] += lmbda * vv[j, f] * (c[j] - 1) * vv[j, q]
+    if is_smp_exp:
+        for f in range(d):
+            for q in range(f, d):
+                for j in range(len(c)):
+                    A_[f, q] += lmbda * vv[j, f] * vv[j, q]
+    else:
+        for f in range(d):
+            for q in range(f, d):
+                A_[f, q] += lmbda * covar[f, q]
+                for j in range(len(c)):
+                    A_[f, q] += lmbda * vv[j, f] * (c[j] - 1) * vv[j, q]
 
     for f in range(d):
         for q in range(f + 1, d):
             A_[q, f] = A_[f, q]
 
 
-def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda):
+def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda, is_smp_exp=True):
     """
     """
     if lmbda <= 0:
@@ -71,17 +79,20 @@ def _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, factors, covar, lmbda):
     c = val + factors.dtype.type(0.0)
     vv = factors[ind].copy()
 
-    Ap[:] += lmbda * ((covar @ p) + vv.T @ np.diag(c - 1) @ (vv @ p))
+    if is_smp_exp:
+        Ap[:] += lmbda * vv.T @ (vv @ p)
+    else:
+        Ap[:] += lmbda * ((covar @ p) + vv.T @ np.diag(c - 1) @ (vv @ p))
 
 
 @nb.njit(
     [
-        "void(f4[::1], f4[::1], i4[::1], f4[::1], f4[:,::1], f4[:,::1], f4)",
-        "void(f8[::1], f8[::1], i4[::1], f8[::1], f8[:,::1], f8[:,::1], f8)",
+        "void(f4[::1], f4[::1], i4[::1], f4[::1], f4[:,::1], f4[:,::1], f4, b1)",
+        "void(f8[::1], f8[::1], i4[::1], f8[::1], f8[:,::1], f8[:,::1], f8, b1)",
     ],
     cache=True,
 )
-def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda):
+def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda, is_smp_exp):
     """
     """
     if lmbda <= 0:
@@ -92,21 +103,30 @@ def _compute_terms_wals_cg_Ap(Ap, val, ind, p, factors, covar, lmbda):
     c = val + factors.dtype.type(0.0)
     vv = factors[ind].copy()
 
-    # compute 'Ap'
-    for f in range(d):
-        for q in range(d):
-            Ap[f] += lmbda * covar[f, q] * p[q]
+    if is_smp_exp:
+        for j in range(len(c)):
+            vp = p.dtype.type(0.0)
+            for f in range(d):
+                vp += vv[j, f] * p[f]
 
-    for j in range(len(c)):
-        vp = p.dtype.type(0.0)
+            for f in range(d):
+                Ap[f] += lmbda * vv[j, f] * vp
+    else:
+        # compute 'Ap'
         for f in range(d):
-            vp += vv[j, f] * p[f]
+            for q in range(d):
+                Ap[f] += lmbda * covar[f, q] * p[q]
 
-        for f in range(d):
-            Ap[f] += lmbda * vv[j, f] * (c[j] - 1) * vp
+        for j in range(len(c)):
+            vp = p.dtype.type(0.0)
+            for f in range(d):
+                vp += vv[j, f] * p[f]
+
+            for f in range(d):
+                Ap[f] += lmbda * vv[j, f] * (c[j] - 1) * vp
 
 
-def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda):
+def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda, is_smp_exp=False):
     """
     """
     if lmbda <= 0:
@@ -122,12 +142,12 @@ def _compute_terms_wals_cg_b_npy(b_, val, ind, factors, lmbda):
 
 @nb.njit(
     [
-        "void(f4[::1], f4[::1], i4[::1], f4[:, ::1], f4)",
-        "void(f8[::1], f8[::1], i4[::1], f8[:, ::1], f8)",
+        "void(f4[::1], f4[::1], i4[::1], f4[:, ::1], f4, b1)",
+        "void(f8[::1], f8[::1], i4[::1], f8[:, ::1], f8, b1)",
     ],
     cache=True,
 )
-def _compute_terms_wals_cg_b(b_, val, ind, factors, lmbda):
+def _compute_terms_wals_cg_b(b_, val, ind, factors, lmbda, is_smp_exp):
     """
     """
     if lmbda <= 0:
@@ -357,12 +377,15 @@ def _cg_Ap_aarms_npy(
     lmbda_g,
     lmbda_s,
     lmbda_a,
+    is_smp_exp,
+    is_smp_exp_y,
+    is_smp_exp_g
 ):
     """
     """
-    _compute_terms_wals_cg_Ap_npy(Ap, val_x, ind_x, p, V, VV, 1)
-    _compute_terms_wals_cg_Ap_npy(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y)
-    _compute_terms_wals_cg_Ap_npy(Ap, val_g, ind_g, p, P, PP, lmbda_g)
+    _compute_terms_wals_cg_Ap_npy(Ap, val_x, ind_x, p, V, VV, 1, is_smp_exp)
+    _compute_terms_wals_cg_Ap_npy(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals_cg_Ap_npy(Ap, val_g, ind_g, p, P, PP, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat_cg_Ap_npy(Ap, p, lmbda_s)
     _compute_terms_dense_feat_cg_Ap_npy(Ap, p, lmbda_a)
 
@@ -373,13 +396,13 @@ def _cg_Ap_aarms_npy(
         "f4[::1], f4[::1], "
         "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
         "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:,::1], f4[:,::1], f4[:,::1], "
-        "f4, f4, f4, f4"
+        "f4, f4, f4, f4, b1, b1, b1"
         ")",
         "void("
         "f8[::1], f8[::1], "
         "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
         "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:,::1], f8[:,::1], f8[:,::1], "
-        "f8, f8, f8, f8"
+        "f8, f8, f8, f8, b1, b1, b1"
         ")",
     ],
     cache=True,
@@ -403,12 +426,15 @@ def _cg_Ap_aarms(
     lmbda_g,
     lmbda_s,
     lmbda_a,
+    is_smp_exp,
+    is_smp_exp_y,
+    is_smp_exp_g
 ):
     """
     """
-    _compute_terms_wals_cg_Ap(Ap, val_x, ind_x, p, V, VV, 1)
-    _compute_terms_wals_cg_Ap(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y)
-    _compute_terms_wals_cg_Ap(Ap, val_g, ind_g, p, P, PP, lmbda_g)
+    _compute_terms_wals_cg_Ap(Ap, val_x, ind_x, p, V, VV, 1, is_smp_exp)
+    _compute_terms_wals_cg_Ap(Ap, val_y, ind_y, p, U_tmp, UU, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals_cg_Ap(Ap, val_g, ind_g, p, P, PP, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat_cg_Ap(Ap, p, lmbda_s)
     _compute_terms_dense_feat_cg_Ap(Ap, p, lmbda_a)
 
@@ -436,12 +462,15 @@ def _cg_b_aarms_npy(
     lmbda_g,
     lmbda_s,
     lmbda_a,
+    is_smp_exp,
+    is_smp_exp_y,
+    is_smp_exp_g
 ):
     """
     """
-    _compute_terms_wals_cg_b_npy(b_, val_x, ind_x, V, 1)
-    _compute_terms_wals_cg_b_npy(b_, val_y, ind_y, U_tmp, lmbda_y)
-    _compute_terms_wals_cg_b_npy(b_, val_g, ind_g, P, lmbda_g)
+    _compute_terms_wals_cg_b_npy(b_, val_x, ind_x, V, 1, is_smp_exp)
+    _compute_terms_wals_cg_b_npy(b_, val_y, ind_y, U_tmp, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals_cg_b_npy(b_, val_g, ind_g, P, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat_cg_b_npy(b_, val_s, ind_s, W_s, lmbda_s)
     _compute_terms_dense_feat_cg_b_npy(b_, a, W_a, lmbda_a)
 
@@ -453,14 +482,14 @@ def _cg_b_aarms_npy(
         "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
         "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:,::1], "
         "f4[:,::1], f4[:,::1], f4[:, ::1], f4[:, ::1], "
-        "f4, f4, f4, f4"
+        "f4, f4, f4, f4, b1, b1, b1"
         ")",
         "void("
         "f8[::1], f8[::1], "
         "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
         "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:,::1], "
         "f8[:,::1], f8[:,::1], f8[:, ::1], f8[:, ::1], "
-        "f8, f8, f8, f8"
+        "f8, f8, f8, f8, b1, b1, b1"
         ")",
     ],
     cache=True,
@@ -488,12 +517,15 @@ def _cg_b_aarms(
     lmbda_g,
     lmbda_s,
     lmbda_a,
+    is_smp_exp,
+    is_smp_exp_y,
+    is_smp_exp_g
 ):
     """
     """
-    _compute_terms_wals_cg_b(b_, val_x, ind_x, V, 1)
-    _compute_terms_wals_cg_b(b_, val_y, ind_y, U_tmp, lmbda_y)
-    _compute_terms_wals_cg_b(b_, val_g, ind_g, P, lmbda_g)
+    _compute_terms_wals_cg_b(b_, val_x, ind_x, V, 1, is_smp_exp)
+    _compute_terms_wals_cg_b(b_, val_y, ind_y, U_tmp, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals_cg_b(b_, val_g, ind_g, P, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat_cg_b(b_, val_s, ind_s, W_s, lmbda_s)
     _compute_terms_dense_feat_cg_b(b_, a, W_a, lmbda_a)
 
@@ -529,13 +561,13 @@ def fetch(u, data, indices, indptr, lmbda):
 # =============================================================================
 
 
-def partial_wals_vanilla_npy(u, val, ind, U, V, VV, lmbda):
+def partial_wals_vanilla_npy(u, val, ind, U, V, VV, lmbda, is_smp_exp=False):
     """
     """
     d = U.shape[1]
     A_ = lmbda * np.eye(d, dtype=U.dtype)  # already add ridge term
     b_ = np.zeros((d,), dtype=U.dtype)
-    _compute_terms_wals(A_, b_, val, ind, V, VV, 1)
+    _compute_terms_wals(A_, b_, val, ind, V, VV, 1, is_smp_exp)
 
     # solve system to update factor
     U[u] = np.linalg.solve(A_, b_)
@@ -543,23 +575,23 @@ def partial_wals_vanilla_npy(u, val, ind, U, V, VV, lmbda):
 
 @nb.njit(
     [
-        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4)",
-        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8)",
+        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4, b1)",
+        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8, b1)",
     ],
     cache=True,
 )
-def partial_wals_vanilla(u, val, ind, U, V, VV, lmbda):
+def partial_wals_vanilla(u, val, ind, U, V, VV, lmbda, is_smp_exp=False):
     """
     """
     d = U.shape[1]
     A_ = lmbda * np.eye(d, dtype=U.dtype)
     b_ = np.zeros((d,), dtype=U.dtype)
-    _compute_terms_wals(A_, b_, val, ind, V, VV, 1)
+    _compute_terms_wals(A_, b_, val, ind, V, VV, 1, is_smp_exp)
     # solve
     U[u] = np.linalg.solve(A_, b_)
 
 
-def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20):
+def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, is_smp_exp=False, cg_steps=5, eps=1e-20):
     """
     """
     d = U.shape[1]
@@ -568,13 +600,13 @@ def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e
     # compute residual
     # first compute "Ap"
     r_ = lmbda * u_.copy()  # residual (b - Ap)
-    _compute_terms_wals_cg_Ap_npy(r_, val, ind, u_, V, VV, 1)
+    _compute_terms_wals_cg_Ap_npy(r_, val, ind, u_, V, VV, 1, is_smp_exp)
 
     # flip the sign
     r_ *= -1
 
     # add "b"
-    _compute_terms_wals_cg_b_npy(r_, val, ind, V, 1)
+    _compute_terms_wals_cg_b_npy(r_, val, ind, V, 1, is_smp_exp)
 
     p = r_.copy()
     rsold = r_.dtype.type(0.0)
@@ -585,7 +617,7 @@ def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e
 
     for it in range(cg_steps):
         Ap = lmbda * p.copy()
-        _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, V, VV, 1)
+        _compute_terms_wals_cg_Ap_npy(Ap, val, ind, p, V, VV, 1, is_smp_exp)
 
         # update
         u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
@@ -600,12 +632,12 @@ def partial_wals_vanilla_cg_npy(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e
 
 @nb.njit(
     [
-        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4, i8, f8)",
-        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8, i8, f8)",
+        "void(i8, f4[::1], i4[::1], f4[:,::1], f4[:,::1], f4[:,::1], f4, b1, i8, f8)",
+        "void(i8, f8[::1], i4[::1], f8[:,::1], f8[:,::1], f8[:,::1], f8, b1, i8, f8)",
     ],
     cache=True,
 )
-def partial_wals_vanilla_cg(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20):
+def partial_wals_vanilla_cg(u, val, ind, U, V, VV, lmbda, is_smp_exp=False, cg_steps=5, eps=1e-20):
     """
     """
     d = U.shape[1]
@@ -614,13 +646,13 @@ def partial_wals_vanilla_cg(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20)
     # compute residual
     # first compute "Ap"
     r_ = lmbda * u_.copy()  # residual (b - Ap)
-    _compute_terms_wals_cg_Ap(r_, val, ind, u_, V, VV, 1)
+    _compute_terms_wals_cg_Ap(r_, val, ind, u_, V, VV, 1, is_smp_exp)
 
     # flip the sign
     r_ *= -1
 
     # add "b"
-    _compute_terms_wals_cg_b(r_, val, ind, V, 1)
+    _compute_terms_wals_cg_b(r_, val, ind, V, 1, is_smp_exp)
 
     p = r_.copy()
     rsold = r_.dtype.type(0.0)
@@ -631,7 +663,7 @@ def partial_wals_vanilla_cg(u, val, ind, U, V, VV, lmbda, cg_steps=5, eps=1e-20)
 
     for it in range(cg_steps):
         Ap = lmbda * p.copy()
-        _compute_terms_wals_cg_Ap(Ap, val, ind, p, V, VV, 1)
+        _compute_terms_wals_cg_Ap(Ap, val, ind, p, V, VV, 1, is_smp_exp)
 
         # update
         u_, p, r_, rsold = _cg_update(d, u_, Ap, p, r_, rsold, eps)
@@ -668,8 +700,11 @@ def partial_wals_npy(
     lmbda_g,
     lmbda_a,
     lmbda_s,  # loss weights
-    lmbda,
-):  # ridge coefficient
+    lmbda,  # ridge coefficient
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False  # implicit / sampled explicit flags
+):
     """
     """
     d = U.shape[1]
@@ -681,9 +716,9 @@ def partial_wals_npy(
     b_ = np.zeros((d,), dtype=U.dtype)
 
     # add terms to A_ and b_
-    _compute_terms_wals_npy(A_, b_, val_x, ind_x, V, VV, 1)
-    _compute_terms_wals_npy(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y)
-    _compute_terms_wals_npy(A_, b_, val_g, ind_g, P, PP, lmbda_g)
+    _compute_terms_wals_npy(A_, b_, val_x, ind_x, V, VV, 1, is_smp_exp)
+    _compute_terms_wals_npy(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals_npy(A_, b_, val_g, ind_g, P, PP, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat_npy(A_, b_, val_s, ind_s, W_s, lmbda_s)
     _compute_terms_dense_feat_npy(A_, b_, a, W_a, lmbda_a)
 
@@ -698,14 +733,14 @@ def partial_wals_npy(
         "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
         "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
         "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
-        "f4, f4, f4, f4, f4"
+        "f4, f4, f4, f4, f4, b1, b1, b1"
         ")",
         "void("
         "i8, "
         "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
         "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
         "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
-        "f8, f8, f8, f8, f8"
+        "f8, f8, f8, f8, f8, b1, b1, b1"
         ")",
     ],
     cache=True,
@@ -735,6 +770,9 @@ def partial_wals(
     lmbda_a,
     lmbda_s,
     lmbda,
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False
 ):
     """
     """
@@ -747,9 +785,9 @@ def partial_wals(
     b_ = np.zeros((d,), dtype=U.dtype)
 
     # add terms to A_ and b_
-    _compute_terms_wals(A_, b_, val_x, ind_x, V, VV, 1)
-    _compute_terms_wals(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y)
-    _compute_terms_wals(A_, b_, val_g, ind_g, P, PP, lmbda_g)
+    _compute_terms_wals(A_, b_, val_x, ind_x, V, VV, 1, is_smp_exp)
+    _compute_terms_wals(A_, b_, val_y, ind_y, U_tmp, UU, lmbda_y, is_smp_exp_y)
+    _compute_terms_wals(A_, b_, val_g, ind_g, P, PP, lmbda_g, is_smp_exp_g)
     _compute_terms_sparse_feat(A_, b_, val_s, ind_s, W_s, lmbda_s)
     _compute_terms_dense_feat(A_, b_, a, W_a, lmbda_a)
 
@@ -782,6 +820,9 @@ def partial_wals_cg_npy(
     lmbda_a,
     lmbda_s,
     lmbda,
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False,
     cg_steps=5,
     eps=1e-20,
 ):
@@ -816,6 +857,9 @@ def partial_wals_cg_npy(
         lmbda_g,
         lmbda_s,
         lmbda_a,
+        is_smp_exp,
+        is_smp_exp_y,
+        is_smp_exp_g
     )
 
     # flip the sign
@@ -845,6 +889,9 @@ def partial_wals_cg_npy(
         lmbda_g,
         lmbda_s,
         lmbda_a,
+        is_smp_exp,
+        is_smp_exp_y,
+        is_smp_exp_g
     )
 
     p = r_.copy()
@@ -875,6 +922,9 @@ def partial_wals_cg_npy(
             lmbda_g,
             lmbda_s,
             lmbda_a,
+            is_smp_exp,
+            is_smp_exp_y,
+            is_smp_exp_g
         )
 
         # update
@@ -895,7 +945,7 @@ def partial_wals_cg_npy(
         "f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], f4[::1], i4[::1], "
         "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
         "f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], f4[:,::1], "
-        "f4, f4, f4, f4, f4, "
+        "f4, f4, f4, f4, f4, b1, b1, b1, "
         "i8, f8"
         ")",
         "void("
@@ -903,7 +953,7 @@ def partial_wals_cg_npy(
         "f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], f8[::1], i4[::1], "
         "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
         "f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], f8[:,::1], "
-        "f8, f8, f8, f8, f8, "
+        "f8, f8, f8, f8, f8, b1, b1, b1, "
         "i8, f8"
         ")",
     ],
@@ -934,6 +984,9 @@ def partial_wals_cg(
     lmbda_a,
     lmbda_s,
     lmbda,
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False,
     cg_steps=5,
     eps=1e-20,
 ):
@@ -968,6 +1021,9 @@ def partial_wals_cg(
         lmbda_g,
         lmbda_s,
         lmbda_a,
+        is_smp_exp,
+        is_smp_exp_y,
+        is_smp_exp_g
     )
 
     # flip the sign
@@ -997,6 +1053,9 @@ def partial_wals_cg(
         lmbda_g,
         lmbda_s,
         lmbda_a,
+        is_smp_exp,
+        is_smp_exp_y,
+        is_smp_exp_g
     )
 
     p = r_.copy()
@@ -1027,6 +1086,9 @@ def partial_wals_cg(
             lmbda_g,
             lmbda_s,
             lmbda_a,
+            is_smp_exp,
+            is_smp_exp_y,
+            is_smp_exp_g
         )
 
         # update
@@ -1068,6 +1130,9 @@ def update_user_npy(
     lmbda_a,
     lmbda_s,
     lmbda,
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False,
     solver="cg",
     cg_steps=5,
     eps=1e-20,
@@ -1118,6 +1183,9 @@ def update_user_npy(
                 lmbda_a,
                 lmbda_s,
                 lmbda,
+                is_smp_exp,
+                is_smp_exp_y,
+                is_smp_exp_g
             )
         elif solver == "cg":
             partial_wals_cg_npy(
@@ -1145,6 +1213,9 @@ def update_user_npy(
                 lmbda_a,
                 lmbda_s,
                 lmbda,
+                is_smp_exp,
+                is_smp_exp_y,
+                is_smp_exp_g,
                 cg_steps=cg_steps,
                 eps=eps,
             )
@@ -1176,6 +1247,9 @@ def update_user_npy(
             nb.f4,
             nb.f4,
             nb.f4,
+            nb.b1,
+            nb.b1,
+            nb.b1,
             nb.types.unicode_type,
             nb.i8,
             nb.f8,
@@ -1204,6 +1278,9 @@ def update_user_npy(
             nb.f8,
             nb.f8,
             nb.f8,
+            nb.b1,
+            nb.b1,
+            nb.b1,
             nb.types.unicode_type,
             nb.i8,
             nb.f8,
@@ -1237,6 +1314,9 @@ def update_user(
     lmbda_a,
     lmbda_s,
     lmbda,
+    is_smp_exp=False,
+    is_smp_exp_y=False,
+    is_smp_exp_g=False,
     solver="cg",
     cg_steps=5,
     eps=1e-20,
@@ -1287,6 +1367,9 @@ def update_user(
                 lmbda_a,
                 lmbda_s,
                 lmbda,
+                is_smp_exp,
+                is_smp_exp_y,
+                is_smp_exp_g
             )
 
         elif solver == "cg":
@@ -1315,6 +1398,9 @@ def update_user(
                 lmbda_a,
                 lmbda_s,
                 lmbda,
+                is_smp_exp,
+                is_smp_exp_y,
+                is_smp_exp_g,
                 cg_steps=cg_steps,
                 eps=eps,
             )
@@ -1328,6 +1414,7 @@ def update_side_npy(
     U,
     lmbda_g,
     lmbda,
+    is_smp_exp_g=False,
     solver="lu",
     cg_steps=5,
     eps=1e-20,
@@ -1351,11 +1438,11 @@ def update_side_npy(
             continue
 
         if solver == "lu":
-            partial_wals_vanilla_npy(l, val_g, ind_g, P, U, UU, new_lmbda)
+            partial_wals_vanilla_npy(l, val_g, ind_g, P, U, UU, new_lmbda, is_smp_exp_g)
 
         elif solver == "cg":
             partial_wals_vanilla_cg_npy(
-                l, val_g, ind_g, P, U, UU, new_lmbda, cg_steps=cg_steps, eps=eps
+                l, val_g, ind_g, P, U, UU, new_lmbda, is_smp_exp_g, cg_steps=cg_steps, eps=eps
             )
 
 
@@ -1370,6 +1457,7 @@ def update_side_npy(
             nb.f4[:, ::1],
             nb.f4,
             nb.f4,
+            nb.b1,
             nb.types.unicode_type,
             nb.i8,
             nb.f8,
@@ -1382,6 +1470,7 @@ def update_side_npy(
             nb.f8[:, ::1],
             nb.f8,
             nb.f8,
+            nb.b1,
             nb.types.unicode_type,
             nb.i8,
             nb.f8,
@@ -1397,6 +1486,7 @@ def update_side(
     U,
     lmbda_g,
     lmbda,
+    is_smp_exp_g=False,
     solver="cg",
     cg_steps=5,
     eps=1e-20,
@@ -1420,10 +1510,10 @@ def update_side(
             continue
 
         if solver == "lu":
-            partial_wals_vanilla(l, val_g, ind_g, P, U, UU, new_lmbda)
+            partial_wals_vanilla(l, val_g, ind_g, P, U, UU, new_lmbda, is_smp_exp_g)
         elif solver == "cg":
             partial_wals_vanilla_cg(
-                l, val_g, ind_g, P, U, UU, new_lmbda, cg_steps=cg_steps, eps=eps
+                l, val_g, ind_g, P, U, UU, new_lmbda, is_smp_exp_g, cg_steps=cg_steps, eps=eps
             )
 
 

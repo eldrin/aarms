@@ -23,8 +23,9 @@ def _build_mat(container, shape):
     ).tocsr()
 
 
-def user_ratio_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5, rand_state=None):
-    """ Split given each user records into subset
+def user_ratio_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5,
+                             minimum_interaction=3, rand_state=None):
+    """ Split given each user records into subsets
 
     This split is to check typical internal ranking accracy.
     (not checking cold-start problem)
@@ -34,6 +35,10 @@ def user_ratio_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5, rand_state=Non
         train_ratio (float): ratio of training records per user
         valid_ratio (float): ratio of validation records per user
                              out of non-training records
+        minimum_interaction (int): minimum interaction of user to be considered.
+                                   if it's smaller than this,
+                                   put all records to the training set
+        rand_state (bool or int): random state seed number or None
     Returns:
         scipy.sparse.csr_matrix: training matrix
         scipy.sparse.csr_matrix: validation matrix
@@ -52,27 +57,98 @@ def user_ratio_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5, rand_state=Non
     train = {"V": [], "I": [], "J": []}
     valid = {"V": [], "I": [], "J": []}
     test = {"V": [], "I": [], "J": []}
-    for i in range(X.shape[0]):
+    for i in range(csr.shape[0]):
         idx, dat = slice_row_sparse(csr, i)
-        rnd_idx = rng.permutation(len(idx))
-        if len(idx) <= 1:
-            _store_data(i, train, idx, dat, rnd_idx, 0, len(idx))
-
         n = len(idx)
+        rnd_idx = rng.permutation(n)
+
+        # not to make cornercase
+        if n <= minimum_interaction:
+            _store_data(i, train, idx, dat, rnd_idx, 0, n)
+            continue
+
+        # compute each bounds for valid/train
         train_bound = int(train_ratio * n)
         if rng.rand() > 0.5:
             valid_bound = int(valid_ratio_ * n) + train_bound
         else:
             valid_bound = int(valid_ratio_ * n) + train_bound + 1
 
+        # store them to the containers
         _store_data(i, train, idx, dat, rnd_idx, 0, train_bound)
         _store_data(i, valid, idx, dat, rnd_idx, train_bound, valid_bound)
         _store_data(i, test, idx, dat, rnd_idx, valid_bound, n)
 
     return tuple(
-        _build_mat(container, X.shape)
+        _build_mat(container, csr.shape)
         for container in [train, valid, test]
     )
+
+
+def user_ratio_shuffle_split_with_targets(X,
+                                          train_ratio=0.8,
+                                          valid_ratio=0.5,
+                                          n_valid_users=1000,
+                                          n_test_users=1000,
+                                          minimum_interaction=3,
+                                          rand_state=None):
+    """ Split given test / valid user records into subsets
+    
+    User records are splitted proportionally per user
+    as same as `user_ratio_shuffle_split`.
+    However, split is only made for randomly selected test / valid user population.
+    
+    Inputs:
+        X (scipy.sparse.csr_matrix): user-item matrix
+        train_ratio (float): ratio of training records per user
+        valid_ratio (float): ratio of validation records per user
+                             out of non-training records
+        minimum_interaction (int): minimum interaction of user to be considered.
+                                   if it's smaller than this,
+                                   put all records to the training set
+        rand_state (bool or int): random state seed number or None
+    Returns:
+        scipy.sparse.csr_matrix: training matrix
+        scipy.sparse.csr_matrix: validation matrix
+        scipy.sparse.csr_matrix: testing matrix
+    """
+    # first draw valid / test users
+    rnd_idx = np.random.permutation(X.shape[0])
+
+    valid_users = rnd_idx[:n_valid_users]
+    test_users = rnd_idx[n_valid_users:n_valid_users + n_test_users]
+    train_users = rnd_idx[n_valid_users + n_test_users:]
+    
+    # split records for valid / test users
+    Xvl, Xvl_vl, Xvl_ts = user_ratio_shuffle_split(X[valid_users],
+                                                   train_ratio,
+                                                   valid_ratio,
+                                                   minimum_interaction,
+                                                   rand_state)
+    
+    # merge them, as this scheme does not need within user validation set
+    Xvl_ts = Xvl_vl + Xvl_ts
+    
+    Xts, Xts_vl, Xts_ts = user_ratio_shuffle_split(X[test_users],
+                                                   train_ratio,
+                                                   valid_ratio,
+                                                   minimum_interaction,
+                                                   rand_state)
+    Xts_ts = Xts_vl + Xts_ts  # merge
+    
+    # assign them back to the original data
+    Xtr = X[train_users]
+    Xtr_ = sp.vstack([Xvl, Xts, Xtr])
+    Xts_ = sp.vstack([Xvl_ts, Xts_ts, Xtr])
+    
+    # un-shuffle
+    reverse_idx = {j:i for i, j in enumerate(rnd_idx)}
+    reverse_idx = [reverse_idx[i] for i in range(X.shape[0])]
+
+    Xtr_ = Xtr_[reverse_idx]
+    Xts_ = Xts_[reverse_idx]
+    
+    return Xtr_, Xts_, (train_users, valid_users, test_users)
 
 
 def nonzero_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5, rand_state=None):
@@ -223,3 +299,38 @@ def gen_ksplit(X, k=5, method='user',
             folds.append(fold)
 
         return folds
+
+
+def identity_check_sparse(X1, X2):
+    """REALLY SIMPLE TEST FOR SPLITTING
+    
+    It does not verify the ratio / etc, but matching the entire entries
+    reason for using `!=` rather than `==` is that `==` evaluate all the zero entry,
+    which will not be benefitted from the sparsity.
+    
+    reference::
+        https://stackoverflow.com/questions/30685024/check-if-two-scipy-sparse-csr-matrix-are-equal
+    """
+    return (X1 != X2).nnz == 0
+
+
+def test_user_ratio_split_integrity(X, Xtr, Xvl, Xts):
+    """ For testing purpose
+    """
+    Xhat = Xtr + Xvl + Xts
+    return identity_check_sparse(X, Xhat)
+
+
+def test_user_ratio_split_with_target_integrity(X, Xtr, Xts,
+                                                train_users,
+                                                valid_users,
+                                                test_users):
+    """ For testing purpose
+    """
+    train_check = identity_check_sparse(Xtr[train_users], X[train_users])
+    valid_check = identity_check_sparse(Xtr[valid_users] + Xts[valid_users],
+                                        X[valid_users])
+    test_check = identity_check_sparse(Xtr[test_users] + Xts[test_users],
+                                       X[test_users])
+    
+    return all([train_check, valid_check, test_check])

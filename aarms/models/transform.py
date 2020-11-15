@@ -1,6 +1,8 @@
 import numpy as np
 from scipy import sparse as sp
 
+from ..matrix import SparseMatrix
+
 
 def check_sparse(X, force_type="csr"):
     """"""
@@ -19,7 +21,7 @@ def check_sparse(X, force_type="csr"):
         raise ValueError("[ERROR] Input is not a sparse matrix!")
 
 
-def linear_confidence(X, alpha):
+def linear_confidence(X, alpha=5):
     """"""
     X = check_sparse(X)
     Y = X.copy()
@@ -27,7 +29,7 @@ def linear_confidence(X, alpha):
     return Y
 
 
-def log_confidence(X, alpha, eps):
+def log_confidence(X, alpha=5, eps=1):
     """"""
     X = check_sparse(X)
     Y = X.copy()
@@ -36,7 +38,7 @@ def log_confidence(X, alpha, eps):
     return Y
 
 
-def sppmi(X, k):
+def sppmi(X, k=1):
     """"""
     X = check_sparse(X, force_type=None)
 

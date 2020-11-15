@@ -7,25 +7,17 @@ import numpy as np
 from tqdm import tqdm
 
 
+TOTAL_RATINGS = 20000263
+
 
 def load_interaction(path, verbose=False):
     """
     """
-    total_ratings = 20000263
-    if positive_value is not None:
-        if isinstance(positive_value, (int, float)):
-            val_fn = lambda raw_val: positive_value
-        elif inspect.isfunction(positive_value):
-            val_fn = positive_value
-    else:
-        # identity
-        val_fn = lambda raw_val: raw_val
-    
     # load interaction
     I, J, V = [], [], []
     items = {}
     users = {}
-    with tqdm(total=total_ratings, disable=not verbose, ncols=80) as prog:
+    with tqdm(total=TOTAL_RATINGS, disable=not verbose, ncols=80) as prog:
         with open(join(path, 'ratings.csv')) as f:
             for uid, iid, rating, ts in csv.reader(f):
                 if uid == 'userId':
@@ -40,7 +32,7 @@ def load_interaction(path, verbose=False):
 
                 I.append(users[uid])
                 J.append(items[iid])
-                V.append(val_fn(rating))
+                V.append(rating)
                 prog.update()
                 
     # build sparse mat
@@ -102,10 +94,10 @@ def load_item_features(path, items):
     return H, genres
 
 
-def load_ml2m(path):
+def load_ml2m(path, verbose=False):
     """ Load MovieLens-2M dataset for test purpose
     """
-    X, users, items = load_interaction(path)
+    X, users, items = load_interaction(path, verbose)
     G, tags = load_user_features(path, users)
     H, genres = load_item_features(path, items)
     return X, G, H, users, items, tags, genres
