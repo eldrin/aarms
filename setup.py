@@ -34,6 +34,6 @@ setup(name='aarms',
           'dev': [
               'scikit-learn>=0.23.2',
           ]
-      }
+      },
       test_suite='tests',
       zip_safe=False)
