@@ -7,7 +7,6 @@ import numba as nb
 # Atomic operations
 # =============================================================================
 
-
 def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda, is_smp_exp=False):
     """
     """
@@ -26,6 +25,7 @@ def _compute_terms_wals_npy(A_, b_, val, ind, factors, covar, lmbda, is_smp_exp=
         A_ += lmbda * vv.T @ vv
     else:
         A_ += lmbda * (covar + vv.T @ np.diag(c - 1) @ vv)
+
 
 @nb.njit(
     [

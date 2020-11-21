@@ -9,14 +9,14 @@ from scipy import sparse as sp
 from tqdm import tqdm
 
 from ..matrix import InteractionMatrix, SparseFeatureMatrix, DenseFeatureMatrix
-from ..utils import check_blas_config, check_spmat, check_densemat
+from ..utils import check_spmat, check_densemat
 from ._als import update_side as update_side
 from ._als import update_user as update_user
 from ._als import update_weight_dense
-from .base import BaseRecommender, FactorizationMixin
+from .base import AARMSRecommender, NumbaFactorizationMixin
 
 
-class ALS(FactorizationMixin, BaseRecommender):
+class ALS(NumbaFactorizationMixin, AARMSRecommender):
     def __init__(
         self,
         k,
@@ -29,24 +29,13 @@ class ALS(FactorizationMixin, BaseRecommender):
         n_jobs=-1
     ):
         """"""
-        BaseRecommender.__init__(self)
-        FactorizationMixin.__init__(self, dtype, k, init)
+        AARMSRecommender.__init__(self)
+        NumbaFactorizationMixin.__init__(self, dtype, k, init, n_jobs)
 
         self.l2 = self.f_dtype(l2)
         self.n_iters = n_iters
-        self.n_jobs = n_jobs
         self.solver = solver
         self.cg_steps = cg_steps
-
-        check_blas_config()
-        if n_jobs > nb.config.NUMBA_NUM_THREADS:
-            warnings.warn('n_jobs should be set lower than the number of cores! '
-                          'setting it to the number...')
-            self.n_jobs = nb.config.NUMBA_NUM_THREADS
-        elif n_jobs == -1:
-            self.n_jobs = nb.config.NUMBA_NUM_THREADS
-        else:
-            self.n_jobs = n_jobs
 
     def __repr__(self):
         return "ALS@{:d}".format(self.k)
@@ -142,9 +131,9 @@ class ALS(FactorizationMixin, BaseRecommender):
         inputs['item_other_t']['data'] = inputs['item_other']['data'].transpose()
 
         # fit model
-        self._fit(inputs, valid_user_item, verbose)
+        self._fit(inputs, verbose)
 
-    def _fit(self, inputs, valid_user_item, verbose):
+    def _fit(self, inputs, verbose):
         """
         """
         # set threading
@@ -242,7 +231,8 @@ class ALS(FactorizationMixin, BaseRecommender):
         )
 
     def _get_score(self, user):
-        """"""
+        """
+        """
         return self.embeddings_["user"][user] @ self.embeddings_["item"].T
 
     def _check_inputs(self, inputs):

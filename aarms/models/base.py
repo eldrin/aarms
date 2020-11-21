@@ -1,7 +1,9 @@
+import warnings
 from collections.abc import Iterable
 
 import numpy as np
-from ..utils import argpart_sort, slice_row_sparse
+import numba as nb
+from ..utils import argpart_sort, slice_row_sparse, check_blas_config
 from ..evaluation.metrics import ndcg
 
 
@@ -42,6 +44,28 @@ class BaseRecommender:
             count += 1.
 
         return scores / count
+
+
+class AARMSRecommender(BaseRecommender):
+    """
+    """
+    def __init__(self):
+        super().__init__()
+    
+    def _get_score(self, user):
+        """
+        """
+        raise NotImplementedError()
+    
+    def _update_factor(self, target_entity, inputs, eps=1e-20):
+        """
+        """
+        raise NotImplementedError()
+        
+    def _check_inputs(self, inputs):
+        """
+        """
+        raise NotImplementedError()
 
 
 class BaseItemFeatRecommender(BaseRecommender):
@@ -90,3 +114,33 @@ class FactorizationMixin:
     def _get_score(self, user):
         """"""
         raise NotImplementedError()
+
+
+class MulticoreFactorizationMixin(FactorizationMixin):
+    def __init__(self, dtype, k, init, n_jobs=-1):
+        """
+        """
+        super().__init__(dtype, k, init)
+        self._valid_n_jobs(n_jobs)
+        
+    def _valid_n_jobs(self, n_jobs):
+        """
+        """
+        raise NotImplementedError()
+
+
+class NumbaFactorizationMixin(MulticoreFactorizationMixin):
+    """
+    """
+    def _valid_n_jobs(self, n_jobs):
+        """
+        """
+        check_blas_config()
+        if n_jobs > nb.config.NUMBA_NUM_THREADS:
+            warnings.warn('n_jobs should be set lower than the number of cores! '
+                          'setting it to the number...')
+            self.n_jobs = nb.config.NUMBA_NUM_THREADS
+        elif n_jobs == -1:
+            self.n_jobs = nb.config.NUMBA_NUM_THREADS
+        else:
+            self.n_jobs = n_jobs

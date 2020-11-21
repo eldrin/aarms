@@ -120,6 +120,25 @@ class TestAARMS(unittest.TestCase):
         R = sp.csr_matrix(R)
 
         return R
+    
+    def _gen_symmetric_data(self, n=6, d=2, is_explicit=False, rand_state=1345):
+        """
+        """
+        rng = np.random.RandomState(rand_state)
+        U = rng.randn(n, d)
+        X = U @ U.T
+        if is_explicit:
+            # symmetric random mask M
+            M = sp.rand(X.shape[0], X.shape[1], density=0.2)
+            M = M @ M.T
+            M.data[:] = 1
+            R = X * M.A
+        else:
+            R = (X > 0).astype(int)
+        R = sp.csr_matrix(R)
+        R.eliminate_zeros()
+        
+        return R
 
     def _compare_recon(self, X, Xhat, thresh=1e-3, **case_arguments):
         """
