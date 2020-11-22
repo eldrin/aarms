@@ -185,7 +185,7 @@ class TestALS(TestAARMS):
                 try:
                     als = ALS(k = 1,
                               l2 = 0,
-                              n_iters = 10,
+                              n_iters = 35,
                               cg_steps = 3,
                               dtype = dtype)
                     als.fit(R_)
