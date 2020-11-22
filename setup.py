@@ -30,5 +30,10 @@ setup(name='aarms',
       # packages=['aarms'],
       packages=find_packages('.'),
       install_requires=requirements(),
+      extras_require={
+          'dev': [
+              'scikit-learn>=0.23.2',
+          ]
+      },
       test_suite='tests',
       zip_safe=False)

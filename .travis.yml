@@ -13,7 +13,8 @@ python:
 
 # command to install dependencies
 install:
-    - pip install -r requirements.txt
+    - pip install -e ".[dev]"
+    #     - pip install -r requirements.txt
 
 # command to run test
 script:
