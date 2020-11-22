@@ -163,7 +163,7 @@ class TestALS(TestAARMS):
                     else:
                         self.fail(msg=e)
 
-    def test_vanilla_sampled_explicit(self, n_trials=1, rand_state=1234):
+    def test_vanilla_sampled_explicit(self, n_trials=2, rand_state=1234):
         """
         """
         R = self._gen_sampled_explicit_data()
