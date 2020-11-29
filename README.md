@@ -54,10 +54,12 @@ As a pre-alpha version, currently, we mostly provide the API specialized on the 
 
 ## TODOs
 
-- [ ] Symmetric ALS (with features)
+- [x] Symmetric ALS (with features)
+- [ ] `fit_user` method for the new user (or entity) arrival scenario (with some records)
 - [ ] refactoring and code wrangling
 - [ ] code coverage
   - [ ] adding more tests
+- [ ] (feature) embedding class for dealing with dynamic online update
 
 ## License
 
