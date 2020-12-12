@@ -83,7 +83,7 @@ class InteractionMatrix(SparseMatrix):
         """
         return InteractionMatrix(self._data.T.tocsr(),
                                  self.is_implicit,
-                                 self.transform,
+                                 self._transform_fn,
                                  self.dtype)
 
     @property

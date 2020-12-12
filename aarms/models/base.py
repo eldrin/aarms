@@ -4,7 +4,8 @@ from collections.abc import Iterable
 import numpy as np
 import numba as nb
 from ..utils import argpart_sort, slice_row_sparse, check_blas_config
-from ..evaluation.metrics import ndcg
+# TODO: this should be fixed later as we updated validation scheme
+from ..evaluation.metrics._metrics import ndcg
 
 
 class BaseRecommender:
@@ -22,6 +23,7 @@ class BaseRecommender:
     def validate(self, user_item, valid_user_item,
                  targets=None, n_tests=2000, topk=100):
         """"""
+        # TODO: this should be fixed later as we updated validation scheme
         if targets is not None and isinstance(targets, Iterable):
             if len(targets) <= 0:
                 raise ValueError('[ERROR] target length should be positive!')
@@ -51,30 +53,34 @@ class AARMSRecommender(BaseRecommender):
     """
     def __init__(self):
         super().__init__()
-    
-    def _get_score(self, user):
+
+    def _get_score(self, user, from_to=('user', 'item')):
         """
         """
         raise NotImplementedError()
-    
+
     def _update_factor(self, target_entity, inputs, eps=1e-20):
         """
         """
         raise NotImplementedError()
-        
+
     def _check_inputs(self, inputs):
         """
         """
         raise NotImplementedError()
 
-
-class BaseItemFeatRecommender(BaseRecommender):
-    def __init__(self):
-        super().__init__()
-
-    def fit(self, user_item, item_feat, valid_user_item=None, verbose=False):
+    def predict(self, user, user_item=None,
+                from_to=('user', 'item'), topk=100):
         """"""
-        raise NotImplementedError()
+        s = self._get_score(user, from_to)
+        if user_item is not None:
+            u0, u1 = user_item.indptr[user], user_item.indptr[user + 1]
+            if u1 > u0:
+                train = user_item.indices[u0:u1]
+                s[train] = -np.inf
+
+        pred = argpart_sort(s, topk, ascending=False)
+        return pred
 
 
 class FactorizationMixin:
@@ -99,22 +105,6 @@ class FactorizationMixin:
                 np.random.randn(size, self.k).astype(self.dtype) * self.init
             )
 
-    def predict(self, user, user_item=None, topk=100):
-        """"""
-        s = self._get_score(user)
-        if user_item is not None:
-            u0, u1 = user_item.indptr[user], user_item.indptr[user + 1]
-            if u1 > u0:
-                train = user_item.indices[u0:u1]
-                s[train] = -np.inf
-
-        pred = argpart_sort(s, topk, ascending=False)
-        return pred
-
-    def _get_score(self, user):
-        """"""
-        raise NotImplementedError()
-
 
 class MulticoreFactorizationMixin(FactorizationMixin):
     def __init__(self, dtype, k, init, n_jobs=-1):
@@ -122,7 +112,7 @@ class MulticoreFactorizationMixin(FactorizationMixin):
         """
         super().__init__(dtype, k, init)
         self._valid_n_jobs(n_jobs)
-        
+
     def _valid_n_jobs(self, n_jobs):
         """
         """

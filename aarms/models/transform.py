@@ -61,3 +61,63 @@ def sppmi(X, k=1):
     # make sure the zeroed entry considered in sparse_matrix scheme
     sppmi.eliminate_zeros()
     return sppmi.tocsr()
+
+
+def _sparse_elm_mul(spmat_csr, col):
+    """
+    spmat (n, m)
+    col (n,)
+    """
+    for i in range(spmat_csr.shape[0]):
+        i0, i1 = spmat_csr.indptr[i], spmat_csr.indptr[i+1]
+        if i1 == i0:
+            continue
+        spmat_csr.data[i0:i1] *= col[i]
+    return spmat_csr
+
+
+def _normalize_tfidf(csr, norm=2):
+    """
+    """
+    for i in range(csr.shape[0]):
+        i0, i1 = csr.indptr[i], csr.indptr[i+1]
+        if i1 == i0:
+            continue
+        csr.data[i0:i1] /= np.linalg.norm(csr.data[i0:i1], ord=norm)
+    return csr
+
+
+def tfidf(X, norm='l2', use_idf=True, smooth_idf=True,
+          sublinear_tf=False, dtype=np.float32):
+    """ TF-IDF transformation
+
+    It follows scikit-learn's API
+    """
+    assert norm in {'l1', 'l2'}
+    X = check_sparse(X, force_type=None).astype(dtype)
+
+    one = X.dtype.type(0.)
+    n, _ = X.shape  # (num_docs, num_terms)
+
+    if sublinear_tf:
+        X.data = np.log(one + X.data)
+
+    if use_idf:
+        # get document frequency
+        df = np.ediff1d(X.T.tocsr().indptr)
+
+        # get idf
+        if smooth_idf:
+            idf = np.log((n + 1) / (df + 1)) + 1
+        else:
+            idf = np.log(n / df) + 1
+
+    # compute tf-idf
+    X = _sparse_elm_mul(X.T.tocsr(), idf).T.tocsr()
+    
+    # normalize if needed
+    if norm is not None:
+        norm_ord = 2 if norm == 'l2' else 1
+        X = _normalize_tfidf(X, norm_ord)
+    
+    return X.tocsr()
