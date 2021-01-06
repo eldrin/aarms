@@ -29,7 +29,7 @@ def update_entity_npy(
     val_y = np.array([0], dtype=data_x.dtype)
     ind_y = np.array([0], dtype=indices_x.dtype)
     _ = np.array([[0]], dtype=U.dtype)  # dummy
-    
+
     # randomize order
     rnd_idx = np.random.permutation(N)
 
@@ -96,7 +96,7 @@ def update_entity(
     U_tmp = U.copy()
     UU = U.T @ U
     PP = P.T @ P
-    
+
     # prepare some dummies for Y term
     val_y = np.array([0], dtype=data_x.dtype)
     ind_y = np.array([0], dtype=np.int32)

@@ -148,7 +148,7 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
             S['data']._data.indices,
             S['data']._data.indptr,
             self.embeddings_['entity'],
-            self.embeddings_["entity_other"],
+            self.embeddings_["other"],
             self.embeddings_["entity_dense_feature"],
             self.embeddings_["entity_sparse_feature"],
             A['data']._data,
@@ -166,7 +166,7 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
             Gt['data']._data.data,
             Gt['data']._data.indices,
             Gt['data']._data.indptr,
-            self.embeddings_["entity_other"],
+            self.embeddings_["other"],
             self.embeddings_["entity"],
             G['lambda'],
             self.l2,
@@ -184,10 +184,11 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
             eps,
         )
 
-    def _get_score(self, node):
+    def _get_score(self, node, from_to=('entity', 'entity')):
         """
         """
-        return self.embeddings_["entity"][node] @ self.embeddings_["entity"].T
+        from_, to_ = from_to
+        return self.embeddings_[from_][node] @ self.embeddings_[to_].T
 
     def _check_inputs(self, inputs):
         """
@@ -225,7 +226,7 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
                         'entity_dense_feature'}:
                 if data.size > 0:
                     assert inputs['entity_entity']['data'].shape[0] == data.shape[0]
-                    
+
         return inputs
 
     def _init_embeddings(
@@ -243,7 +244,7 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
         dims = {"entity": user_item.shape[0]}
 
         if user_other.size > 0:
-            dims["entity_other"] = user_other.shape[1]
+            dims["other"] = user_other.shape[1]
 
         if user_dense_feature.size > 0:
             dims["entity_dense_feature"] = user_dense_feature.shape[1]
@@ -257,7 +258,7 @@ class SymALS(NumbaFactorizationMixin, AARMSRecommender):
         # park placeholders
         all_embs = [
             "entity",
-            "entity_other",
+            "other",
             "entity_dense_feature",
             "entity_sparse_feature",
         ]

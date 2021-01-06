@@ -87,7 +87,6 @@ def user_ratio_shuffle_split(X, train_ratio=0.8, valid_ratio=0.5,
 
 def user_ratio_shuffle_split_with_targets(X,
                                           train_ratio=0.8,
-                                          valid_ratio=0.5,
                                           n_valid_users=1000,
                                           n_test_users=1000,
                                           minimum_interaction=3,
@@ -101,8 +100,8 @@ def user_ratio_shuffle_split_with_targets(X,
     Inputs:
         X (scipy.sparse.csr_matrix): user-item matrix
         train_ratio (float): ratio of training records per user
-        valid_ratio (float): ratio of validation records per user
-                             out of non-training records
+        n_valid_users (int): number of validation users
+        n_test_users (int): number of testing users
         minimum_interaction (int): minimum interaction of user to be considered.
                                    if it's smaller than this,
                                    put all records to the training set
@@ -122,7 +121,7 @@ def user_ratio_shuffle_split_with_targets(X,
     # split records for valid / test users
     Xvl, Xvl_vl, Xvl_ts = user_ratio_shuffle_split(X[valid_users],
                                                    train_ratio,
-                                                   valid_ratio,
+                                                   0.5,  # valid_ratio
                                                    minimum_interaction,
                                                    rand_state)
     
@@ -131,7 +130,7 @@ def user_ratio_shuffle_split_with_targets(X,
     
     Xts, Xts_vl, Xts_ts = user_ratio_shuffle_split(X[test_users],
                                                    train_ratio,
-                                                   valid_ratio,
+                                                   0.5, # valid ratio
                                                    minimum_interaction,
                                                    rand_state)
     Xts_ts = Xts_vl + Xts_ts  # merge

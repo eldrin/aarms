@@ -230,10 +230,11 @@ class ALS(NumbaFactorizationMixin, AARMSRecommender):
             eps,
         )
 
-    def _get_score(self, user):
+    def _get_score(self, user, from_to=('user', 'item')):
         """
         """
-        return self.embeddings_["user"][user] @ self.embeddings_["item"].T
+        from_, to_ = from_to
+        return self.embeddings_[from_][user] @ self.embeddings_[to_].T
 
     def _check_inputs(self, inputs):
         """
