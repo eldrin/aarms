@@ -22,8 +22,12 @@ class Metric:
         #       otherwise, wrap it into 2d
         if true_rels is not None:
             # true_rels = np.array(true_rels, dtype=np.float64)
-            true_rels = [rel.astype(np.float64) for rel in true_rels]
-        return trues, preds, true_rels
+            true_rels = [np.asarray(rel).astype(np.float64) for rel in true_rels]
+        return (
+            [np.asarray(t) for t in trues],
+            [np.asarray(p) for p in preds],
+            true_rels
+        )
 
     def compute(self, trues, preds):
         """

@@ -40,11 +40,11 @@ _TEST_CASES = [
             'ndcg': {
                 'binarize': {
                     'linear': 0,
-                    'pow2': 0 
+                    'pow2': 0
                 },
                 'relevance': {
                     'linear': 0,
-                    'pow2': 0 
+                    'pow2': 0
                 }
             },
             'mAP' : 0,
@@ -66,7 +66,7 @@ _TEST_CASES = [
                 },
                 'relevance': {
                     'linear': 0.52129602861432,
-                    'pow2': 0.5787641110093001 
+                    'pow2': 0.5787641110093001
                 }
             },
             'mAP' : 0.25,
@@ -98,7 +98,7 @@ class TestMetrics(unittest.TestCase):
                     for power in ['linear', 'pow2']:
                         b = True if binarize == 'binarize' else False
                         p = True if power == 'pow2' else False
-                        
+
                         metric = NDCG(topk=cutoff, binarize=b, pow2=p)
                         y = metric.compute(rel, man_pred, rel_str)
                         y = y[0]['mean']
