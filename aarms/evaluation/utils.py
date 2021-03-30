@@ -11,6 +11,17 @@ def densify(ui_csr, users, items, item_feat=None,
         filt_targs = np.where(np.ediff1d(csr.indptr) >= thresh)[0]
         return csr[filt_targs], entities[filt_targs], filt_targs
 
+    def _step(ui_csr, users, items, user_thresh, item_thresh, item_feat):
+        """
+        """
+        prev_nnz = ui_csr.nnz
+        iu_csr, items, filt_idx = _filt_entity(ui_csr.T.tocsr(), items, item_thresh)
+        if item_feat is not None:
+            item_feat = item_feat[filt_idx]
+        ui_csr, users, filt_idx = _filt_entity(iu_csr.T.tocsr(), users, user_thresh)
+        diff = prev_nnz - ui_csr.nnz
+        return diff, ui_csr, items, users, item_feat
+
     n_users, _ = ui_csr.shape
     users = np.asarray(users)
     items = np.asarray(items)
@@ -28,15 +39,15 @@ def densify(ui_csr, users, items, item_feat=None,
         # we're done if there's specification for the number of passes
         # and we've done that many times already
         if passed >= n_pass:
+            # before getting out of the loop, just to the final check
+            # for entities without any records
+            diff, ui_csr, users, items, item_feat = _step(ui_csr, users, items,
+                                                          1, 1, item_feat)
             break
 
-        prev_nnz = ui_csr.nnz
-        iu_csr, items, filt_idx = _filt_entity(ui_csr.T.tocsr(), items, item_thresh)
-        if item_feat is not None:
-            item_feat = item_feat[filt_idx]
-        ui_csr, users, filt_idx = _filt_entity(iu_csr.T.tocsr(), users, user_thresh)
-        diff = prev_nnz - ui_csr.nnz
-
+        diff, ui_csr, users, items, item_feat = _step(ui_csr, users, items,
+                                                      user_thresh, item_thresh,
+                                                      item_feat)
         passed += 1
 
     out = (ui_csr, users, items)
