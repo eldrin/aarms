@@ -20,7 +20,7 @@ def densify(ui_csr, users, items, item_feat=None,
             item_feat = item_feat[filt_idx]
         ui_csr, users, filt_idx = _filt_entity(iu_csr.T.tocsr(), users, user_thresh)
         diff = prev_nnz - ui_csr.nnz
-        return diff, ui_csr, items, users, item_feat
+        return diff, ui_csr, users, items, item_feat
 
     n_users, _ = ui_csr.shape
     users = np.asarray(users)
